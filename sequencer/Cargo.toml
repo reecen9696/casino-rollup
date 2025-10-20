@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 # Web framework
 axum.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tower = { workspace = true, features = ["util"] }
 tower-http.workspace = true
 
@@ -14,8 +14,14 @@ tower-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-# Utilities
+# Random number generation
+rand = "0.8"
+
+# Time and UUID
+chrono = { version = "0.4", features = ["serde"] }
 uuid.workspace = true
+
+# Utilities
 thiserror.workspace = true
 anyhow.workspace = true
 clap.workspace = true

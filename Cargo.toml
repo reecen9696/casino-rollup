@@ -46,3 +46,4 @@ tracing-subscriber = "0.3"
 # Testing
 tokio-test = "0.4"
 assert_matches = "1.5"
+tempfile = "3.0"
