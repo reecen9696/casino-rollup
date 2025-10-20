@@ -1,9 +1,10 @@
 // Performance testing dashboard for ZK Casino
 
-import React, { useState } from 'react';
-import { usePerformanceTest } from '../hooks/usePerformanceTest';
-import { PerformanceChart } from './PerformanceChart';
-import { TestResults } from './TestResults';
+import React, { useState } from "react";
+import { usePerformanceTest } from "../hooks/usePerformanceTest";
+import { PerformanceChart } from "./PerformanceChart";
+import { TestResults } from "./TestResults";
+import { SettlementQueueMonitor } from "./SettlementQueueMonitor";
 
 export const PerformanceDashboard: React.FC = () => {
   const {
@@ -18,13 +19,15 @@ export const PerformanceDashboard: React.FC = () => {
     clearHistory,
   } = usePerformanceTest();
 
-  const [selectedTestType, setSelectedTestType] = useState<'burst' | 'sustained'>('burst');
+  const [selectedTestType, setSelectedTestType] = useState<
+    "burst" | "sustained"
+  >("burst");
   const [burstRequests, setBurstRequests] = useState(100);
   const [sustainedRps, setSustainedRps] = useState(50);
   const [sustainedDuration, setSustainedDuration] = useState(10);
 
   const handleRunTest = async () => {
-    if (selectedTestType === 'burst') {
+    if (selectedTestType === "burst") {
       await runBurstTest(burstRequests);
     } else {
       await runSustainedTest(sustainedRps, sustainedDuration);
@@ -46,11 +49,12 @@ export const PerformanceDashboard: React.FC = () => {
           Test and monitor the high-performance sequencer with real-time metrics
         </p>
       </div>
-
       {/* Test Configuration */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Test Configuration</h2>
-        
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">
+          Test Configuration
+        </h2>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Test Type Selection */}
           <div>
@@ -59,7 +63,9 @@ export const PerformanceDashboard: React.FC = () => {
             </label>
             <select
               value={selectedTestType}
-              onChange={(e) => setSelectedTestType(e.target.value as 'burst' | 'sustained')}
+              onChange={(e) =>
+                setSelectedTestType(e.target.value as "burst" | "sustained")
+              }
               disabled={isRunning}
               className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
@@ -70,7 +76,7 @@ export const PerformanceDashboard: React.FC = () => {
 
           {/* Test Parameters */}
           <div>
-            {selectedTestType === 'burst' ? (
+            {selectedTestType === "burst" ? (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Total Requests
@@ -116,7 +122,9 @@ export const PerformanceDashboard: React.FC = () => {
                   </label>
                   <select
                     value={sustainedDuration}
-                    onChange={(e) => setSustainedDuration(Number(e.target.value))}
+                    onChange={(e) =>
+                      setSustainedDuration(Number(e.target.value))
+                    }
                     disabled={isRunning}
                     className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   >
@@ -140,13 +148,13 @@ export const PerformanceDashboard: React.FC = () => {
             disabled={isRunning}
             className={`px-6 py-2 rounded-md font-medium transition-colors ${
               isRunning
-                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                : 'bg-blue-600 text-white hover:bg-blue-700'
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                : "bg-blue-600 text-white hover:bg-blue-700"
             }`}
           >
-            {isRunning ? 'Running Test...' : 'Start Test'}
+            {isRunning ? "Running Test..." : "Start Test"}
           </button>
-          
+
           {isRunning && (
             <button
               onClick={cancelTest}
@@ -155,7 +163,7 @@ export const PerformanceDashboard: React.FC = () => {
               Cancel Test
             </button>
           )}
-          
+
           {testHistory.length > 0 && !isRunning && (
             <button
               onClick={clearHistory}
@@ -166,62 +174,132 @@ export const PerformanceDashboard: React.FC = () => {
           )}
         </div>
       </div>
+      {/* Live Metrics and Settlement Queue - Side by Side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Live Metrics */}
+        {liveMetrics && (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+            <h2 className="text-lg font-semibold text-gray-900 mb-3">
+              Live Metrics
+            </h2>
 
-      {/* Live Metrics */}
-      {liveMetrics && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Live Metrics</h2>
-          
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-blue-50 p-4 rounded-lg">
-              <div className="text-2xl font-bold text-blue-600">
-                {formatMetric(liveMetrics.currentRps)}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="bg-blue-50 p-3 rounded-lg">
+                <div className="text-xl font-bold text-blue-600">
+                  {formatMetric(liveMetrics.currentRps)}
+                </div>
+                <div className="text-xs text-blue-600">Current RPS</div>
               </div>
-              <div className="text-sm text-blue-600">Current RPS</div>
+
+              <div className="bg-green-50 p-3 rounded-lg">
+                <div className="text-xl font-bold text-green-600">
+                  {formatMetric(liveMetrics.currentLatency)}ms
+                </div>
+                <div className="text-xs text-green-600">Latency</div>
+              </div>
+
+              <div className="bg-purple-50 p-3 rounded-lg">
+                <div className="text-xl font-bold text-purple-600">
+                  {liveMetrics.requestsCompleted}
+                </div>
+                <div className="text-xs text-purple-600">Completed</div>
+              </div>
+
+              <div className="bg-red-50 p-3 rounded-lg">
+                <div className="text-xl font-bold text-red-600">
+                  {liveMetrics.requestsFailed}
+                </div>
+                <div className="text-xs text-red-600">Failed</div>
+              </div>
             </div>
-            
-            <div className="bg-green-50 p-4 rounded-lg">
-              <div className="text-2xl font-bold text-green-600">
-                {formatMetric(liveMetrics.currentLatency)}ms
+
+            {/* Compact Bet Outcome Metrics */}
+            <div className="mb-4">
+              <h3 className="text-sm font-medium text-gray-900 mb-2">
+                Bet Outcomes
+              </h3>
+              <div className="grid grid-cols-5 gap-2">
+                <div className="bg-amber-50 p-2 rounded text-center">
+                  <div className="text-lg font-bold text-amber-600">
+                    🪙 {liveMetrics.headsResults}
+                  </div>
+                  <div className="text-xs text-amber-600">Heads</div>
+                </div>
+
+                <div className="bg-amber-50 p-2 rounded text-center">
+                  <div className="text-lg font-bold text-amber-600">
+                    🪙 {liveMetrics.tailsResults}
+                  </div>
+                  <div className="text-xs text-amber-600">Tails</div>
+                </div>
+
+                <div className="bg-emerald-50 p-2 rounded text-center">
+                  <div className="text-lg font-bold text-emerald-600">
+                    ✅ {liveMetrics.correctGuesses}
+                  </div>
+                  <div className="text-xs text-emerald-600">Wins</div>
+                </div>
+
+                <div className="bg-violet-50 p-2 rounded text-center">
+                  <div className="text-lg font-bold text-violet-600">
+                    💰 {(liveMetrics.totalPayout / 1000000).toFixed(2)}
+                  </div>
+                  <div className="text-xs text-violet-600">SOL</div>
+                </div>
+
+                <div className="bg-indigo-50 p-2 rounded text-center">
+                  <div className="text-lg font-bold text-indigo-600">
+                    🎯{" "}
+                    {liveMetrics.requestsCompleted > 0
+                      ? (
+                          (liveMetrics.correctGuesses /
+                            liveMetrics.requestsCompleted) *
+                          100
+                        ).toFixed(1)
+                      : "0"}
+                    %
+                  </div>
+                  <div className="text-xs text-indigo-600">Win Rate</div>
+                </div>
               </div>
-              <div className="text-sm text-green-600">Current Latency</div>
             </div>
-            
-            <div className="bg-purple-50 p-4 rounded-lg">
-              <div className="text-2xl font-bold text-purple-600">
-                {liveMetrics.requestsCompleted}
-              </div>
-              <div className="text-sm text-purple-600">Completed</div>
-            </div>
-            
-            <div className="bg-red-50 p-4 rounded-lg">
-              <div className="text-2xl font-bold text-red-600">
-                {liveMetrics.requestsFailed}
-              </div>
-              <div className="text-sm text-red-600">Failed</div>
+
+            <div className="text-xs text-gray-600 bg-gray-50 p-2 rounded">
+              Elapsed: {formatMetric(liveMetrics.elapsedTime)}s | Payout:{" "}
+              {(liveMetrics.totalPayout / 1000000).toFixed(3)} SOL | Win Rate:{" "}
+              {liveMetrics.requestsCompleted > 0
+                ? (
+                    (liveMetrics.correctGuesses /
+                      liveMetrics.requestsCompleted) *
+                    100
+                  ).toFixed(1)
+                : "0"}
+              %
             </div>
           </div>
-          
-          <div className="mt-4 text-sm text-gray-600">
-            Elapsed Time: {formatMetric(liveMetrics.elapsedTime)}s
-          </div>
-        </div>
-      )}
+        )}
 
-      {/* Performance Chart */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Real-time Performance</h2>
-        <PerformanceChart data={chartData} height={400} />
+        {/* Settlement Queue Monitor */}
+        <SettlementQueueMonitor />
       </div>
-
+      {/* Performance Chart */}
+      {chartData.length > 0 && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">
+            Performance Chart
+          </h2>
+          <PerformanceChart data={chartData} />
+        </div>
+      )}{" "}
       {/* Current Test Results */}
       {currentTest && (
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Current Test</h2>
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">
+            Current Test
+          </h2>
           <TestResults testResult={currentTest} />
         </div>
       )}
-
       {/* Test History */}
       {testHistory.length > 0 && (
         <div>
@@ -240,14 +318,17 @@ export const PerformanceDashboard: React.FC = () => {
           </div>
         </div>
       )}
-
       {/* Performance Targets */}
       <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200 p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Performance Targets</h2>
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">
+          Performance Targets
+        </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="text-center">
             <div className="text-3xl font-bold text-blue-600">656+ RPS</div>
-            <div className="text-sm text-gray-600 mt-1">Current Achievement</div>
+            <div className="text-sm text-gray-600 mt-1">
+              Current Achievement
+            </div>
           </div>
           <div className="text-center">
             <div className="text-3xl font-bold text-green-600">&lt;300ms</div>

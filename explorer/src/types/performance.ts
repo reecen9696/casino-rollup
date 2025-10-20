@@ -26,7 +26,7 @@ export interface TestMetrics {
 }
 
 export interface TestConfig {
-  testType: 'burst' | 'sustained' | 'custom';
+  testType: "burst" | "sustained" | "custom";
   totalRequests?: number;
   rps?: number;
   duration?: number;
@@ -39,7 +39,7 @@ export interface TestResult {
   id: string;
   config: TestConfig;
   metrics: TestMetrics;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  status: "running" | "completed" | "failed" | "cancelled";
   errors: string[];
   createdAt: Date;
   completedAt?: Date;

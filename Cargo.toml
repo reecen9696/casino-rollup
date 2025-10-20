@@ -43,6 +43,13 @@ clap = { version = "4.0", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
+# High-performance data structures
+dashmap = "5.5"
+parking_lot = "0.12"
+
+# System info
+num_cpus = "1.16"
+
 # Testing
 tokio-test = "0.4"
 assert_matches = "1.5"

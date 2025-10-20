@@ -11,10 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
+use tower_http::cors::{CorsLayer, Any};
 use tracing::info;
 use chrono::{DateTime, Utc};
 use rand::Rng;
 use uuid::Uuid;
+use std::sync::atomic::{AtomicU64, Ordering};
+use parking_lot::Mutex;
 
 mod database;
 use database::{Database, Bet, PlayerBalance, DatabaseError};
@@ -40,6 +43,26 @@ pub struct OracleProofData {
     pub verified: bool,
 }
 
+// Settlement queue statistics
+#[derive(Debug, Clone)]
+pub struct SettlementStats {
+    pub total_items_queued: Arc<AtomicU64>,
+    pub total_batches_processed: Arc<AtomicU64>,
+    pub items_in_current_batch: Arc<AtomicU64>,
+    pub last_batch_processed_at: Arc<Mutex<Option<DateTime<Utc>>>>,
+}
+
+impl SettlementStats {
+    pub fn new() -> Self {
+        Self {
+            total_items_queued: Arc::new(AtomicU64::new(0)),
+            total_batches_processed: Arc::new(AtomicU64::new(0)),
+            items_in_current_batch: Arc::new(AtomicU64::new(0)),
+            last_batch_processed_at: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
 // High-performance channels for background processing
 pub type SettlementSender = mpsc::UnboundedSender<SettlementItem>;
 pub type SettlementReceiver = mpsc::UnboundedReceiver<SettlementItem>;
@@ -60,6 +83,7 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub settlement_sender: SettlementSender,
     pub oracle_client: OracleClient,
+    pub settlement_stats: SettlementStats,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -147,6 +171,12 @@ impl From<&Bet> for BetResponse {
 }
 
 pub fn create_app(state: AppState) -> Router {
+    // Configure CORS to allow requests from the frontend
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     Router::new()
         .route("/health", get(health_check))
         .route("/v1/bet", post(bet_handler))
@@ -155,6 +185,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/v1/withdraw", post(withdraw_handler))
         .route("/v1/bets/:address", get(get_player_bets))
         .route("/v1/recent-bets", get(get_recent_bets))
+        .route("/v1/settlement-stats", get(get_settlement_stats))
+        .layer(cors)
         .with_state(state)
 }
 
@@ -163,13 +195,18 @@ pub async fn health_check() -> &'static str {
 }
 
 // Settlement batch processor for ZK proof preparation (VF Node pattern)
-async fn process_settlement_batch(batch: &[SettlementItem]) {
+async fn process_settlement_batch(batch: &[SettlementItem], stats: &SettlementStats) {
     let start_time = std::time::Instant::now();
     
     tracing::info!(
         "Processing settlement batch of {} items for ZK proof generation", 
         batch.len()
     );
+    
+    // Update statistics
+    stats.total_batches_processed.fetch_add(1, Ordering::Relaxed);
+    stats.items_in_current_batch.fetch_sub(batch.len() as u64, Ordering::Relaxed);
+    *stats.last_batch_processed_at.lock() = Some(Utc::now());
     
     // TODO: Future ZK proof generation and oracle verification
     // For now, log the batch processing for oracle integration readiness
@@ -273,6 +310,10 @@ pub async fn bet_handler(
             payout: payout as i64,
             timestamp: response_clone.timestamp,
         };
+        
+        // Update settlement statistics
+        state_clone.settlement_stats.total_items_queued.fetch_add(1, Ordering::Relaxed);
+        state_clone.settlement_stats.items_in_current_batch.fetch_add(1, Ordering::Relaxed);
         
         if let Err(e) = state_clone.settlement_sender.send(settlement_item) {
             tracing::error!("Failed to queue settlement item for bet {}: {}", bet_id, e);
@@ -413,6 +454,31 @@ pub async fn get_recent_bets(
     }))
 }
 
+#[derive(Serialize)]
+pub struct SettlementStatsResponse {
+    pub total_items_queued: u64,
+    pub total_batches_processed: u64,
+    pub items_in_current_batch: u64,
+    pub last_batch_processed_at: Option<DateTime<Utc>>,
+    pub queue_status: String,
+}
+
+pub async fn get_settlement_stats(
+    State(state): State<AppState>,
+) -> Result<Json<SettlementStatsResponse>, StatusCode> {
+    let stats = &state.settlement_stats;
+    
+    let response = SettlementStatsResponse {
+        total_items_queued: stats.total_items_queued.load(Ordering::Relaxed),
+        total_batches_processed: stats.total_batches_processed.load(Ordering::Relaxed),
+        items_in_current_batch: stats.items_in_current_batch.load(Ordering::Relaxed),
+        last_batch_processed_at: *stats.last_batch_processed_at.lock(),
+        queue_status: "active".to_string(),
+    };
+    
+    Ok(Json(response))
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -427,6 +493,7 @@ async fn main() -> Result<()> {
 
     // Initialize settlement queue for ZK proof batching (VF Node pattern)
     let (settlement_sender, settlement_receiver) = mpsc::unbounded_channel();
+    let settlement_stats = SettlementStats::new();
 
     // Initialize oracle manager for proof fetching (as requested by user)
     let oracle_config = OracleConfig::default();
@@ -441,9 +508,11 @@ async fn main() -> Result<()> {
         db: Arc::new(db),
         settlement_sender,
         oracle_client,
+        settlement_stats: settlement_stats.clone(),
     };
 
     // Settlement processor for ZK proof batching (VF Node background pattern)
+    let stats_clone = settlement_stats.clone();
     let settlement_processor_handle = tokio::spawn(async move {
         let mut settlement_receiver = settlement_receiver;
         let mut batch = Vec::new();
@@ -459,7 +528,7 @@ async fn main() -> Result<()> {
                             
                             // Process batch when it reaches size limit (prepare for ZK rollup)
                             if batch.len() >= 50 {
-                                process_settlement_batch(&batch).await;
+                                process_settlement_batch(&batch, &stats_clone).await;
                                 batch.clear();
                             }
                         }
@@ -470,7 +539,7 @@ async fn main() -> Result<()> {
                 // Process batch on timer (ensure regular processing)
                 _ = interval.tick() => {
                     if !batch.is_empty() {
-                        process_settlement_batch(&batch).await;
+                        process_settlement_batch(&batch, &stats_clone).await;
                         batch.clear();
                     }
                 }
