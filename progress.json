@@ -1,0 +1,186 @@
+{
+  "project": "Solana ZK Casino MVP",
+  "version": "0.1.0",
+  "current_phase": 0,
+  "phases": {
+    "0": {
+      "name": "Foundations",
+      "description": "Clean mono-repo + local env",
+      "status": "completed",
+      "completed_at": "2025-10-20",
+      "tasks": {
+        "toolchain_setup": {
+          "description": "Rust stable, Solana CLI, Anchor, Node/PNPM",
+          "status": "completed",
+          "files": [
+            "package.json",
+            "tsconfig.json",
+            "explorer/package.json",
+            "explorer/tsconfig.json",
+            "explorer/tsconfig.node.json"
+          ]
+        },
+        "workspace_structure": {
+          "description": "Create programs/, sequencer/, prover/, explorer/ directories",
+          "status": "completed",
+          "files": [
+            "programs/",
+            "sequencer/",
+            "prover/",
+            "explorer/",
+            ".github/workflows/"
+          ]
+        },
+        "anchor_workspace": {
+          "description": "Initialize Anchor workspace with vault and verifier programs",
+          "status": "completed",
+          "files": [
+            "Anchor.toml",
+            "programs/vault/",
+            "programs/verifier/",
+            "tests/zkcasino.ts"
+          ]
+        },
+        "rust_workspace": {
+          "description": "Root Cargo.toml with workspace configuration",
+          "status": "completed",
+          "files": [
+            "Cargo.toml",
+            "sequencer/Cargo.toml",
+            "prover/Cargo.toml",
+            "programs/vault/Cargo.toml",
+            "programs/verifier/Cargo.toml"
+          ]
+        },
+        "ci_setup": {
+          "description": "GitHub Actions for lint/build/test",
+          "status": "completed",
+          "files": [".github/workflows/ci.yml"]
+        },
+        "hello_world_test": {
+          "description": "Basic hello-world instruction test",
+          "status": "completed",
+          "files": [
+            "programs/vault/src/lib.rs",
+            "programs/verifier/src/lib.rs",
+            "tests/zkcasino.ts"
+          ]
+        },
+        "unit_testing": {
+          "description": "Comprehensive unit tests for all components with CI integration",
+          "status": "completed",
+          "files": [
+            "sequencer/src/main.rs",
+            "prover/src/lib.rs",
+            "programs/vault/src/lib.rs",
+            "programs/verifier/src/lib.rs",
+            "tests/zkcasino.ts",
+            "explorer/src/App.test.tsx",
+            "explorer/src/test/basic.test.ts",
+            "explorer/src/test/setup.ts",
+            "test-phase0.sh",
+            ".github/workflows/ci.yml"
+          ]
+        }
+      },
+      "exit_criteria": [
+        "anchor test runs",
+        "local validator boots",
+        "hello-world ix passes",
+        "CI green on lint/build/tests",
+        "comprehensive unit tests pass",
+        "all components have test coverage"
+      ]
+    },
+    "1": {
+      "name": "Fast off-chain Coinflip",
+      "description": "Sub-second UX loop (no chain, no ZK)",
+      "status": "not-started",
+      "tasks": {
+        "sequencer_api": {
+          "description": "Axum REST POST /v1/bet, WS /ws; in-mem ledger + SQLite",
+          "status": "not-started",
+          "files": []
+        },
+        "explorer_stub": {
+          "description": "Simple web listing bets from SQLite",
+          "status": "not-started",
+          "files": []
+        }
+      }
+    },
+    "2": {
+      "name": "On-chain skeleton",
+      "description": "Wire Solana path end-to-end (no real settlement)",
+      "status": "not-started",
+      "tasks": {}
+    },
+    "3": {
+      "name": "ZK minimal",
+      "description": "Accounting-only Groth16 proofs",
+      "status": "not-started",
+      "tasks": {}
+    },
+    "4": {
+      "name": "VRF + fairness plumbing",
+      "description": "Unbiased, auditable RNG (off-circuit for MVP)",
+      "status": "not-started",
+      "tasks": {}
+    },
+    "5": {
+      "name": "Real vaults",
+      "description": "Per-user PDA, still MVP deposits mocked",
+      "status": "not-started",
+      "tasks": {}
+    },
+    "6": {
+      "name": "Data availability & explorer v1",
+      "description": "Reconstructability and user-facing transparency",
+      "status": "not-started",
+      "tasks": {}
+    },
+    "7": {
+      "name": "Hardening & perf",
+      "description": "Latency & throughput bench, failure & recovery",
+      "status": "not-started",
+      "tasks": {}
+    },
+    "8": {
+      "name": "Seams ready",
+      "description": "Multi-operator seams and trustless design docs",
+      "status": "not-started",
+      "tasks": {}
+    }
+  },
+  "completed_files": [
+    "progress.json",
+    "README.md",
+    "Cargo.toml",
+    "Anchor.toml",
+    "package.json",
+    "tsconfig.json",
+    ".gitignore",
+    "programs/vault/Cargo.toml",
+    "programs/vault/src/lib.rs",
+    "programs/verifier/Cargo.toml",
+    "programs/verifier/src/lib.rs",
+    "sequencer/Cargo.toml",
+    "sequencer/src/main.rs",
+    "prover/Cargo.toml",
+    "prover/src/lib.rs",
+    "explorer/package.json",
+    "explorer/vite.config.ts",
+    "explorer/tsconfig.json",
+    "explorer/tsconfig.node.json",
+    "explorer/index.html",
+    "explorer/src/main.tsx",
+    "explorer/src/App.tsx",
+    "explorer/src/App.test.tsx",
+    "explorer/src/test/basic.test.ts",
+    "explorer/src/test/setup.ts",
+    "tests/zkcasino.ts",
+    "test-phase0.sh",
+    ".github/workflows/ci.yml"
+  ],
+  "last_updated": "2025-10-20T00:00:00Z"
+}

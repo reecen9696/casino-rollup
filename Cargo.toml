@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    "programs/vault",
+    "programs/verifier", 
+    "sequencer",
+    "prover"
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["ZK Casino Team"]
+
+[workspace.dependencies]
+# Anchor & Solana
+anchor-lang = "0.29.0"
+anchor-spl = "0.29.0"
+solana-program = "~1.17.0"
+
+# Web framework
+axum = "0.7"
+tokio = { version = "1.0", features = ["full"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["cors"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# ZK & Cryptography
+ark-bn254 = "0.4"
+ark-ff = "0.4"
+ark-ec = "0.4" 
+ark-groth16 = "0.4"
+ark-serialize = "0.4"
+ark-std = "0.4"
+
+# Utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Testing
+tokio-test = "0.4"
+assert_matches = "1.5"

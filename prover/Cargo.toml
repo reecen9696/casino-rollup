@@ -1,0 +1,19 @@
+[package]
+name = "prover"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# ZK & Cryptography
+ark-bn254.workspace = true
+ark-ff.workspace = true
+ark-ec.workspace = true
+ark-groth16.workspace = true
+ark-serialize.workspace = true
+ark-std.workspace = true
+
+# Utilities
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
