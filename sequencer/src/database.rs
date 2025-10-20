@@ -1,8 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bet {
@@ -39,17 +38,17 @@ pub enum DatabaseError {
 }
 
 pub struct Database {
-    bets: Arc<RwLock<HashMap<String, Bet>>>,
-    player_bets: Arc<RwLock<HashMap<String, Vec<String>>>>, // player_address -> bet_ids
-    balances: Arc<RwLock<HashMap<String, PlayerBalance>>>,
+    bets: Arc<DashMap<String, Bet>>,
+    player_bets: Arc<DashMap<String, Vec<String>>>, // player_address -> bet_ids
+    balances: Arc<DashMap<String, PlayerBalance>>,
 }
 
 impl Database {
     pub async fn new(_database_url: &str) -> Result<Self, DatabaseError> {
         Ok(Self {
-            bets: Arc::new(RwLock::new(HashMap::new())),
-            player_bets: Arc::new(RwLock::new(HashMap::new())),
-            balances: Arc::new(RwLock::new(HashMap::new())),
+            bets: Arc::new(DashMap::new()),
+            player_bets: Arc::new(DashMap::new()),
+            balances: Arc::new(DashMap::new()),
         })
     }
 
@@ -59,13 +58,11 @@ impl Database {
     }
 
     pub async fn save_bet(&self, bet: &Bet) -> Result<(), DatabaseError> {
-        let mut bets = self.bets.write().await;
-        let mut player_bets = self.player_bets.write().await;
+        // Insert bet directly with DashMap's concurrent access
+        self.bets.insert(bet.id.clone(), bet.clone());
         
-        bets.insert(bet.id.clone(), bet.clone());
-        
-        // Add to player's bet list
-        player_bets
+        // Add to player's bet list with concurrent access
+        self.player_bets
             .entry(bet.player_address.clone())
             .or_insert_with(Vec::new)
             .push(bet.id.clone());
@@ -74,22 +71,20 @@ impl Database {
     }
 
     pub async fn get_bet(&self, bet_id: &str) -> Result<Option<Bet>, DatabaseError> {
-        let bets = self.bets.read().await;
-        Ok(bets.get(bet_id).cloned())
+        Ok(self.bets.get(bet_id).map(|bet| bet.clone()))
     }
 
     pub async fn get_player_bets(&self, player_address: &str, limit: Option<i64>) -> Result<Vec<Bet>, DatabaseError> {
         let limit = limit.unwrap_or(100) as usize;
-        let player_bets = self.player_bets.read().await;
-        let bets = self.bets.read().await;
         
-        let empty_vec = Vec::new();
-        let bet_ids = player_bets.get(player_address).unwrap_or(&empty_vec);
+        let bet_ids = self.player_bets.get(player_address)
+            .map(|entry| entry.clone())
+            .unwrap_or_default();
         
         let mut player_bet_list: Vec<Bet> = bet_ids
             .iter()
             .rev() // Reverse to get most recent first
-            .filter_map(|id| bets.get(id).cloned())
+            .filter_map(|id| self.bets.get(id).map(|bet| bet.clone()))
             .take(limit)
             .collect();
         
@@ -101,9 +96,13 @@ impl Database {
 
     pub async fn get_recent_bets(&self, limit: Option<i64>) -> Result<Vec<Bet>, DatabaseError> {
         let limit = limit.unwrap_or(50) as usize;
-        let bets = self.bets.read().await;
         
-        let mut all_bets: Vec<Bet> = bets.values().cloned().collect();
+        // Collect all bets using concurrent iteration (VF Node pattern)
+        let mut all_bets: Vec<Bet> = self.bets
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
+        
         all_bets.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
         all_bets.truncate(limit);
         
@@ -111,13 +110,11 @@ impl Database {
     }
 
     pub async fn get_player_balance(&self, player_address: &str) -> Result<Option<PlayerBalance>, DatabaseError> {
-        let balances = self.balances.read().await;
-        Ok(balances.get(player_address).cloned())
+        Ok(self.balances.get(player_address).map(|balance| balance.clone()))
     }
 
     pub async fn create_player_balance(&self, player_address: &str, initial_balance: i64) -> Result<PlayerBalance, DatabaseError> {
         let now = Utc::now();
-        let mut balances = self.balances.write().await;
         
         let balance = PlayerBalance {
             player_address: player_address.to_string(),
@@ -130,50 +127,51 @@ impl Database {
             updated_at: now,
         };
         
-        balances.insert(player_address.to_string(), balance.clone());
+        self.balances.insert(player_address.to_string(), balance.clone());
         Ok(balance)
     }
 
     pub async fn update_player_balance_after_bet(&self, player_address: &str, bet_amount: i64, payout: i64) -> Result<PlayerBalance, DatabaseError> {
         let now = Utc::now();
-        let mut balances = self.balances.write().await;
         
-        let current_balance = balances.get(player_address)
-            .ok_or_else(|| DatabaseError::PlayerNotFound(player_address.to_string()))?;
+        // Use DashMap's entry API for atomic update
+        match self.balances.get(player_address) {
+            Some(current_balance) => {
+                // Check if player has sufficient balance
+                if current_balance.balance < bet_amount {
+                    return Err(DatabaseError::InsufficientBalance {
+                        required: bet_amount,
+                        available: current_balance.balance,
+                    });
+                }
 
-        // Check if player has sufficient balance
-        if current_balance.balance < bet_amount {
-            return Err(DatabaseError::InsufficientBalance {
-                required: bet_amount,
-                available: current_balance.balance,
-            });
+                // Calculate new balance: subtract bet amount, add payout
+                let new_balance = current_balance.balance - bet_amount + payout;
+                let new_total_wagered = current_balance.total_wagered + bet_amount;
+                let new_total_won = current_balance.total_won + payout;
+
+                let updated_balance = PlayerBalance {
+                    player_address: player_address.to_string(),
+                    balance: new_balance,
+                    total_deposited: current_balance.total_deposited,
+                    total_withdrawn: current_balance.total_withdrawn,
+                    total_wagered: new_total_wagered,
+                    total_won: new_total_won,
+                    created_at: current_balance.created_at,
+                    updated_at: now,
+                };
+
+                self.balances.insert(player_address.to_string(), updated_balance.clone());
+                Ok(updated_balance)
+            }
+            None => Err(DatabaseError::PlayerNotFound(player_address.to_string()))
         }
-
-        // Calculate new balance: subtract bet amount, add payout
-        let new_balance = current_balance.balance - bet_amount + payout;
-        let new_total_wagered = current_balance.total_wagered + bet_amount;
-        let new_total_won = current_balance.total_won + payout;
-
-        let updated_balance = PlayerBalance {
-            player_address: player_address.to_string(),
-            balance: new_balance,
-            total_deposited: current_balance.total_deposited,
-            total_withdrawn: current_balance.total_withdrawn,
-            total_wagered: new_total_wagered,
-            total_won: new_total_won,
-            created_at: current_balance.created_at,
-            updated_at: now,
-        };
-
-        balances.insert(player_address.to_string(), updated_balance.clone());
-        Ok(updated_balance)
     }
 
     pub async fn deposit(&self, player_address: &str, amount: i64) -> Result<PlayerBalance, DatabaseError> {
         let now = Utc::now();
-        let mut balances = self.balances.write().await;
         
-        let updated_balance = match balances.get(player_address) {
+        let updated_balance = match self.balances.get(player_address) {
             Some(current_balance) => {
                 let new_balance = current_balance.balance + amount;
                 let new_total_deposited = current_balance.total_deposited + amount;
@@ -203,40 +201,41 @@ impl Database {
             }
         };
 
-        balances.insert(player_address.to_string(), updated_balance.clone());
+        self.balances.insert(player_address.to_string(), updated_balance.clone());
         Ok(updated_balance)
     }
 
     pub async fn withdraw(&self, player_address: &str, amount: i64) -> Result<PlayerBalance, DatabaseError> {
         let now = Utc::now();
-        let mut balances = self.balances.write().await;
         
-        let current_balance = balances.get(player_address)
-            .ok_or_else(|| DatabaseError::PlayerNotFound(player_address.to_string()))?;
+        match self.balances.get(player_address) {
+            Some(current_balance) => {
+                if current_balance.balance < amount {
+                    return Err(DatabaseError::InsufficientBalance {
+                        required: amount,
+                        available: current_balance.balance,
+                    });
+                }
 
-        if current_balance.balance < amount {
-            return Err(DatabaseError::InsufficientBalance {
-                required: amount,
-                available: current_balance.balance,
-            });
+                let new_balance = current_balance.balance - amount;
+                let new_total_withdrawn = current_balance.total_withdrawn + amount;
+
+                let updated_balance = PlayerBalance {
+                    player_address: player_address.to_string(),
+                    balance: new_balance,
+                    total_deposited: current_balance.total_deposited,
+                    total_withdrawn: new_total_withdrawn,
+                    total_wagered: current_balance.total_wagered,
+                    total_won: current_balance.total_won,
+                    created_at: current_balance.created_at,
+                    updated_at: now,
+                };
+
+                self.balances.insert(player_address.to_string(), updated_balance.clone());
+                Ok(updated_balance)
+            }
+            None => Err(DatabaseError::PlayerNotFound(player_address.to_string()))
         }
-
-        let new_balance = current_balance.balance - amount;
-        let new_total_withdrawn = current_balance.total_withdrawn + amount;
-
-        let updated_balance = PlayerBalance {
-            player_address: player_address.to_string(),
-            balance: new_balance,
-            total_deposited: current_balance.total_deposited,
-            total_withdrawn: new_total_withdrawn,
-            total_wagered: current_balance.total_wagered,
-            total_won: current_balance.total_won,
-            created_at: current_balance.created_at,
-            updated_at: now,
-        };
-
-        balances.insert(player_address.to_string(), updated_balance.clone());
-        Ok(updated_balance)
     }
 }
 

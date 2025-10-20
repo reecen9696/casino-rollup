@@ -9,6 +9,8 @@ use axum::{
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
+use tokio::sync::mpsc;
+use tokio::time::{interval, Duration};
 use tracing::info;
 use chrono::{DateTime, Utc};
 use rand::Rng;
@@ -16,6 +18,31 @@ use uuid::Uuid;
 
 mod database;
 use database::{Database, Bet, PlayerBalance, DatabaseError};
+
+mod oracle;
+use oracle::{OracleManager, OracleConfig, OracleClient};
+
+// Settlement queue for ZK proof batching (VF Node pattern)
+#[derive(Debug, Clone)]
+pub struct SettlementItem {
+    pub bet_id: String,
+    pub player_address: String,
+    pub amount: i64,
+    pub payout: i64,
+    pub timestamp: DateTime<Utc>,
+}
+
+// Oracle proof data structure (future integration)
+#[derive(Debug, Clone)]
+pub struct OracleProofData {
+    pub proof_hash: String,
+    pub timestamp: DateTime<Utc>,
+    pub verified: bool,
+}
+
+// High-performance channels for background processing
+pub type SettlementSender = mpsc::UnboundedSender<SettlementItem>;
+pub type SettlementReceiver = mpsc::UnboundedReceiver<SettlementItem>;
 
 #[derive(Parser)]
 #[command(name = "sequencer")]
@@ -31,6 +58,8 @@ pub struct Args {
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Database>,
+    pub settlement_sender: SettlementSender,
+    pub oracle_client: OracleClient,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -40,7 +69,7 @@ pub struct BetRequest {
     pub guess: bool, // true for heads, false for tails
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct BetResponse {
     pub bet_id: String,
     pub player_address: String,
@@ -133,18 +162,58 @@ pub async fn health_check() -> &'static str {
     "OK"
 }
 
+// Settlement batch processor for ZK proof preparation (VF Node pattern)
+async fn process_settlement_batch(batch: &[SettlementItem]) {
+    let start_time = std::time::Instant::now();
+    
+    tracing::info!(
+        "Processing settlement batch of {} items for ZK proof generation", 
+        batch.len()
+    );
+    
+    // TODO: Future ZK proof generation and oracle verification
+    // For now, log the batch processing for oracle integration readiness
+    for item in batch {
+        tracing::debug!(
+            "Settlement item: bet_id={}, player={}, amount={}, payout={}", 
+            item.bet_id, 
+            item.player_address, 
+            item.amount, 
+            item.payout
+        );
+    }
+    
+    // Simulate batch processing time (prepare for actual ZK proof computation)
+    tokio::task::spawn_blocking(move || {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }).await.ok();
+    
+    tracing::info!(
+        "Settlement batch processed in {}μs (ready for oracle/ZK integration)", 
+        start_time.elapsed().as_micros()
+    );
+}
+
 pub async fn bet_handler(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(bet_request): Json<BetRequest>,
 ) -> Result<Json<BetResponse>, StatusCode> {
+    let start_time = std::time::Instant::now();
+    
     // Validate bet amount (minimum 1000 lamports = 0.000001 SOL)
     if bet_request.amount < 1000 {
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    // Generate cryptographically secure random outcome
-    let mut rng = rand::thread_rng();
-    let coin_result = rng.gen::<bool>();
+    // CPU-intensive random generation in background thread (VF Node pattern)
+    let coin_result = tokio::task::spawn_blocking(move || {
+        let mut rng = rand::thread_rng();
+        rng.gen::<bool>()
+    }).await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Generate unique bet ID
+    let bet_id = format!("bet_{}", Uuid::new_v4().simple());
 
     // Determine if player won
     let won = bet_request.guess == coin_result;
@@ -152,9 +221,10 @@ pub async fn bet_handler(
     // Calculate payout (2x for winning, 0 for losing)
     let payout = if won { bet_request.amount * 2 } else { 0 };
 
+    // Create immediate response (VF Node instant response pattern)
     let response = BetResponse {
-        bet_id: format!("bet_{}", Uuid::new_v4().simple()),
-        player_address: bet_request.player_address,
+        bet_id: bet_id.clone(),
+        player_address: bet_request.player_address.clone(),
         amount: bet_request.amount,
         guess: bet_request.guess,
         result: coin_result,
@@ -163,6 +233,59 @@ pub async fn bet_handler(
         timestamp: Utc::now(),
     };
 
+        // Background processing: Save bet and update balances (non-blocking)
+    let state_clone = state.clone();
+    let response_clone = response.clone();
+    tokio::spawn(async move {
+        let processing_time = start_time.elapsed();
+        
+        // Create bet record
+        let bet = Bet {
+            id: bet_id.clone(),
+            player_address: bet_request.player_address.clone(),
+            amount: bet_request.amount as i64,
+            guess: bet_request.guess,
+            result: coin_result,
+            won,
+            payout: payout as i64,
+            timestamp: response_clone.timestamp,
+        };
+
+        // Save bet to database (background)
+        if let Err(e) = state_clone.db.save_bet(&bet).await {
+            tracing::error!("Failed to save bet {}: {}", bet.id, e);
+        }
+
+        // Update player balance (background) - prepare for oracle/ZK processing
+        if let Err(e) = state_clone.db.update_player_balance_after_bet(
+            &bet_request.player_address,
+            bet_request.amount as i64,
+            payout as i64,
+        ).await {
+            tracing::error!("Failed to update balance for player {}: {}", bet_request.player_address, e);
+        }
+
+        // Add to settlement queue for ZK proof batching (VF Node pattern)
+        let settlement_item = SettlementItem {
+            bet_id: bet_id.clone(),
+            player_address: bet_request.player_address.clone(),
+            amount: bet_request.amount as i64,
+            payout: payout as i64,
+            timestamp: response_clone.timestamp,
+        };
+        
+        if let Err(e) = state_clone.settlement_sender.send(settlement_item) {
+            tracing::error!("Failed to queue settlement item for bet {}: {}", bet_id, e);
+        }
+
+        tracing::info!(
+            "Bet {} processed in {}μs (background)", 
+            bet.id, 
+            processing_time.as_micros()
+        );
+    });
+
+    // Instant response to client (VF Node pattern)
     Ok(Json(response))
 }
 
@@ -290,7 +413,7 @@ pub async fn get_recent_bets(
     }))
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
@@ -302,9 +425,58 @@ async fn main() -> Result<()> {
     db.create_tables().await
         .map_err(|e| anyhow::anyhow!("Failed to create database tables: {}", e))?;
 
+    // Initialize settlement queue for ZK proof batching (VF Node pattern)
+    let (settlement_sender, settlement_receiver) = mpsc::unbounded_channel();
+
+    // Initialize oracle manager for proof fetching (as requested by user)
+    let oracle_config = OracleConfig::default();
+    let oracle_manager = OracleManager::new(oracle_config.clone());
+    let oracle_client = OracleClient::new(oracle_config);
+    
+    // Start oracle proof fetching service
+    oracle_manager.start_proof_service().await
+        .map_err(|e| anyhow::anyhow!("Failed to start oracle service: {}", e))?;
+
     let state = AppState {
         db: Arc::new(db),
+        settlement_sender,
+        oracle_client,
     };
+
+    // Settlement processor for ZK proof batching (VF Node background pattern)
+    let settlement_processor_handle = tokio::spawn(async move {
+        let mut settlement_receiver = settlement_receiver;
+        let mut batch = Vec::new();
+        let mut interval = interval(Duration::from_millis(100)); // 100ms batching window
+        
+        loop {
+            tokio::select! {
+                // Receive settlement items
+                item = settlement_receiver.recv() => {
+                    match item {
+                        Some(settlement_item) => {
+                            batch.push(settlement_item);
+                            
+                            // Process batch when it reaches size limit (prepare for ZK rollup)
+                            if batch.len() >= 50 {
+                                process_settlement_batch(&batch).await;
+                                batch.clear();
+                            }
+                        }
+                        None => break, // Channel closed
+                    }
+                }
+                
+                // Process batch on timer (ensure regular processing)
+                _ = interval.tick() => {
+                    if !batch.is_empty() {
+                        process_settlement_batch(&batch).await;
+                        batch.clear();
+                    }
+                }
+            }
+        }
+    });
 
     let app = create_app(state);
 
