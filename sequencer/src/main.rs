@@ -1,6 +1,6 @@
 use anyhow::Result;
 use axum::{
-    extract::{Json as ExtractJson, State, Path},
+    extract::{State, Path},
     http::StatusCode,
     response::Json,
     routing::{get, post},
@@ -12,6 +12,7 @@ use std::{net::SocketAddr, sync::Arc};
 use tracing::info;
 use chrono::{DateTime, Utc};
 use rand::Rng;
+use uuid::Uuid;
 
 mod database;
 use database::{Database, Bet, PlayerBalance, DatabaseError};
@@ -133,55 +134,17 @@ pub async fn health_check() -> &'static str {
 }
 
 pub async fn bet_handler(
-    State(state): State<AppState>,
-    ExtractJson(bet_request): ExtractJson<BetRequest>,
-) -> Result<Json<BetResponse>, (StatusCode, Json<ErrorResponse>)> {
+    State(_state): State<AppState>,
+    Json(bet_request): Json<BetRequest>,
+) -> Result<Json<BetResponse>, StatusCode> {
     // Validate bet amount (minimum 1000 lamports = 0.000001 SOL)
     if bet_request.amount < 1000 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Minimum bet amount is 1000 lamports".to_string(),
-            }),
-        ));
-    }
-
-    // Check if player has sufficient balance
-    let player_balance = state.db.get_player_balance(&bet_request.player_address).await
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Database error: {}", e),
-            }),
-        ))?;
-
-    let current_balance = match player_balance {
-        Some(balance) => balance.balance,
-        None => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "Player not found. Please deposit funds first.".to_string(),
-                }),
-            ));
-        }
-    };
-
-    if current_balance < bet_request.amount as i64 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Insufficient balance. Required: {}, Available: {}", bet_request.amount, current_balance),
-            }),
-        ));
+        return Err(StatusCode::BAD_REQUEST);
     }
 
     // Generate cryptographically secure random outcome
     let mut rng = rand::thread_rng();
     let coin_result = rng.gen::<bool>();
-
-    // Generate unique bet ID
-    let bet_id = format!("bet_{}", uuid::Uuid::new_v4().simple());
 
     // Determine if player won
     let won = bet_request.guess == coin_result;
@@ -189,51 +152,15 @@ pub async fn bet_handler(
     // Calculate payout (2x for winning, 0 for losing)
     let payout = if won { bet_request.amount * 2 } else { 0 };
 
-    // Create bet record
-    let bet = Bet {
-        id: bet_id.clone(),
-        player_address: bet_request.player_address.clone(),
-        amount: bet_request.amount as i64,
-        guess: bet_request.guess,
-        result: coin_result,
-        won,
-        payout: payout as i64,
-        timestamp: Utc::now(),
-    };
-
-    // Save bet to database
-    if let Err(e) = state.db.save_bet(&bet).await {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to save bet: {}", e),
-            }),
-        ));
-    }
-
-    // Update player balance
-    if let Err(e) = state.db.update_player_balance_after_bet(
-        &bet_request.player_address,
-        bet_request.amount as i64,
-        payout as i64,
-    ).await {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to update balance: {}", e),
-            }),
-        ));
-    }
-
     let response = BetResponse {
-        bet_id,
+        bet_id: format!("bet_{}", Uuid::new_v4().simple()),
         player_address: bet_request.player_address,
         amount: bet_request.amount,
         guess: bet_request.guess,
         result: coin_result,
         won,
         payout,
-        timestamp: bet.timestamp,
+        timestamp: Utc::now(),
     };
 
     Ok(Json(response))
@@ -264,7 +191,7 @@ pub async fn get_balance(
 
 pub async fn deposit_handler(
     State(state): State<AppState>,
-    ExtractJson(deposit_request): ExtractJson<DepositRequest>,
+    Json(deposit_request): Json<DepositRequest>,
 ) -> Result<Json<BalanceResponse>, (StatusCode, Json<ErrorResponse>)> {
     if deposit_request.amount == 0 {
         return Err((
@@ -288,7 +215,7 @@ pub async fn deposit_handler(
 
 pub async fn withdraw_handler(
     State(state): State<AppState>,
-    ExtractJson(withdraw_request): ExtractJson<WithdrawRequest>,
+    Json(withdraw_request): Json<WithdrawRequest>,
 ) -> Result<Json<BalanceResponse>, (StatusCode, Json<ErrorResponse>)> {
     if withdraw_request.amount == 0 {
         return Err((
