@@ -1,8 +1,8 @@
 use prover::circuits::accounting::{AccountingCircuit, Bet, BetBatch};
+use prover::proof_generator::{ProofError, ProofGenerator, SerializableProof};
 use prover::witness_generator::{
     create_test_settlement_batch, SettlementBatch, SettlementBet, WitnessError, WitnessGenerator,
 };
-use prover::proof_generator::{ProofError, ProofGenerator, SerializableProof};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -58,7 +58,7 @@ fn test_phase3c_complete_integration() {
     let serialized = proof.to_bytes().unwrap();
     let deserialized = SerializableProof::from_bytes(&serialized).unwrap();
     let serialization_time = start.elapsed();
-    
+
     println!("✓ Serialization round-trip in {:?}", serialization_time);
     println!("  Serialized size: {} bytes", serialized.len());
 
@@ -73,10 +73,16 @@ fn test_phase3c_complete_integration() {
     println!("Verification time: {:?}", verification_time);
     println!("Serialization:     {:?}", serialization_time);
     println!("Proof size:        {} bytes", serialized.len());
-    
+
     // Verify performance targets
-    assert!(proving_time.as_millis() < 1000, "Proving should be under 1 second");
-    assert!(verification_time.as_millis() < 200, "Verification should be under 200ms");
+    assert!(
+        proving_time.as_millis() < 1000,
+        "Proving should be under 1 second"
+    );
+    assert!(
+        verification_time.as_millis() < 200,
+        "Verification should be under 200ms"
+    );
 
     println!("✓ All performance targets met!");
 }
@@ -105,7 +111,10 @@ fn test_witness_generation_error_handling() {
     );
 
     let result = generator.generate_witness(&insufficient_batch);
-    assert!(matches!(result, Err(WitnessError::InsufficientBalance { .. })));
+    assert!(matches!(
+        result,
+        Err(WitnessError::InsufficientBalance { .. })
+    ));
     println!("✓ Insufficient balance error handled correctly");
 
     // Test 3: Unknown user
@@ -169,9 +178,15 @@ fn test_deterministic_proof_generation() {
 
     // Generate multiple proofs with same seed
     let seed = 987654321u64;
-    let proof1 = generator.generate_deterministic_proof(&batch, seed).unwrap();
-    let proof2 = generator.generate_deterministic_proof(&batch, seed).unwrap();
-    let proof3 = generator.generate_deterministic_proof(&batch, seed).unwrap();
+    let proof1 = generator
+        .generate_deterministic_proof(&batch, seed)
+        .unwrap();
+    let proof2 = generator
+        .generate_deterministic_proof(&batch, seed)
+        .unwrap();
+    let proof3 = generator
+        .generate_deterministic_proof(&batch, seed)
+        .unwrap();
 
     // All proofs should be identical
     let bytes1 = proof1.to_bytes().unwrap();
@@ -183,7 +198,9 @@ fn test_deterministic_proof_generation() {
     println!("✓ Deterministic proof generation confirmed");
 
     // Generate proof with different seed
-    let proof4 = generator.generate_deterministic_proof(&batch, seed + 1).unwrap();
+    let proof4 = generator
+        .generate_deterministic_proof(&batch, seed + 1)
+        .unwrap();
     let bytes4 = proof4.to_bytes().unwrap();
 
     assert_ne!(bytes1, bytes4);
@@ -211,10 +228,7 @@ fn test_settlement_batch_validation() {
 
     let valid_batch = create_test_settlement_batch(
         1,
-        vec![
-            (0, 5000, true, true),
-            (1, 3000, false, false),
-        ],
+        vec![(0, 5000, true, true), (1, 3000, false, false)],
         initial_balances.clone(),
         100000,
     );
@@ -251,25 +265,25 @@ fn test_conservation_law_enforcement() {
     let balanced_batch = create_test_settlement_batch(
         1,
         vec![
-            (0, 5000, true, true),   // User 0: +5000
-            (1, 8000, false, true),  // User 1: -8000
-            (2, 3000, true, true),   // User 2: +3000
+            (0, 5000, true, true),  // User 0: +5000
+            (1, 8000, false, true), // User 1: -8000
+            (2, 3000, true, true),  // User 2: +3000
         ],
         initial_balances,
         500000,
     );
 
     let circuit = generator.generate_witness(&balanced_batch).unwrap();
-    
+
     // Verify conservation: User gains = +5000 + 3000 = +8000, User losses = -8000
     // House should lose -8000 + 8000 = 0 net
     println!("✓ Balanced conservation scenario validated");
 
     // Calculate expected values
-    let user0_final = 20000 + 5000;  // Won 5k
-    let user1_final = 25000 - 8000;  // Lost 8k
-    let user2_final = 18000 + 3000;  // Won 3k
-    let house_final = 500000;        // No net change (8k out, 8k in)
+    let user0_final = 20000 + 5000; // Won 5k
+    let user1_final = 25000 - 8000; // Lost 8k
+    let user2_final = 18000 + 3000; // Won 3k
+    let house_final = 500000; // No net change (8k out, 8k in)
 
     // Verify final balances in circuit
     use ark_bn254::Fr;
@@ -286,7 +300,7 @@ fn test_verifying_key_extraction() {
     println!("=== Phase 3c Test: Verifying Key Extraction ===");
 
     let mut generator = ProofGenerator::new(5, 3);
-    
+
     // Before setup
     assert!(generator.get_verifying_key().is_none());
     let vk_result = generator.serialize_verifying_key();
@@ -301,10 +315,10 @@ fn test_verifying_key_extraction() {
     println!("✓ Verifying key serialized: {} bytes", vk_bytes.len());
 
     // Verify we can deserialize (basic sanity check)
-    use ark_groth16::VerifyingKey;
     use ark_bn254::Bn254;
+    use ark_groth16::VerifyingKey;
     use ark_serialize::CanonicalDeserialize;
-    
+
     let _vk = VerifyingKey::<Bn254>::deserialize_compressed(&vk_bytes[..]).unwrap();
     println!("✓ Verifying key deserialization confirmed");
 }
@@ -358,8 +372,8 @@ fn test_edge_case_scenarios() {
     let all_lose_batch = create_test_settlement_batch(
         3,
         vec![
-            (0, 1000, true, false),  // User 0 loses
-            (1, 2000, false, true),  // User 1 loses
+            (0, 1000, true, false), // User 0 loses
+            (1, 2000, false, true), // User 1 loses
         ],
         initial_balances,
         50000,
@@ -396,7 +410,7 @@ fn test_performance_benchmarks() {
     println!("=== Phase 3c Test: Performance Benchmarks ===");
 
     let mut generator = ProofGenerator::new(20, 10); // Larger for performance test
-    
+
     let start = Instant::now();
     generator.setup().unwrap();
     let setup_time = start.elapsed();
@@ -437,11 +451,21 @@ fn test_performance_benchmarks() {
     let start = Instant::now();
     let serialized = proof.to_bytes().unwrap();
     let serialization_time = start.elapsed();
-    println!("Serialization time: {:?}, size: {} bytes", serialization_time, serialized.len());
+    println!(
+        "Serialization time: {:?}, size: {} bytes",
+        serialization_time,
+        serialized.len()
+    );
 
     // Performance assertions
-    assert!(proving_time.as_millis() < 2000, "Proving should be under 2 seconds for large batch");
-    assert!(verification_time.as_millis() < 500, "Verification should be under 500ms");
+    assert!(
+        proving_time.as_millis() < 2000,
+        "Proving should be under 2 seconds for large batch"
+    );
+    assert!(
+        verification_time.as_millis() < 500,
+        "Verification should be under 500ms"
+    );
 
     println!("✓ Performance benchmarks passed!");
 }

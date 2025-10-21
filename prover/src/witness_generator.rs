@@ -13,7 +13,9 @@ pub enum WitnessError {
     },
     #[error("Negative balance detected: user {user_id} would have balance {balance}")]
     NegativeBalance { user_id: u32, balance: i64 },
-    #[error("Conservation law violated: user deltas sum to {user_sum}, house delta is {house_delta}")]
+    #[error(
+        "Conservation law violated: user deltas sum to {user_sum}, house delta is {house_delta}"
+    )]
     ConservationViolation { user_sum: i64, house_delta: i64 },
     #[error("Empty batch: no bets provided")]
     EmptyBatch,
@@ -124,7 +126,8 @@ impl WitnessGenerator {
 
         // Calculate balance deltas (only for real bets)
         let mut user_deltas: HashMap<u32, i64> = HashMap::new();
-        for bet in &settlement_batch.bets {  // Only process real bets
+        for bet in &settlement_batch.bets {
+            // Only process real bets
             *user_deltas.entry(bet.user_id).or_insert(0) += bet.delta();
         }
 
@@ -147,7 +150,8 @@ impl WitnessGenerator {
 
         // Calculate house delta and final balance
         let house_delta: i64 = -user_deltas.values().sum::<i64>();
-        let house_final_balance = (settlement_batch.house_initial_balance as i64 + house_delta) as u64;
+        let house_final_balance =
+            (settlement_batch.house_initial_balance as i64 + house_delta) as u64;
 
         // Validate conservation law
         let user_sum: i64 = user_deltas.values().sum();
@@ -186,7 +190,7 @@ impl WitnessGenerator {
 
         // Create accounting circuit with padded bets
         let circuit = AccountingCircuit::new(
-            accounting_bets,  // Padded to max_batch_size
+            accounting_bets, // Padded to max_batch_size
             settlement_batch.batch_id,
             &initial_balance_array,
             &final_balance_array,
@@ -347,9 +351,9 @@ mod tests {
         let batch = create_test_settlement_batch(
             42,
             vec![
-                (0, 1000, true, true),   // User 0 wins 1000
-                (1, 2000, false, true),  // User 1 loses 2000
-                (0, 500, false, false),  // User 0 wins 500
+                (0, 1000, true, true),  // User 0 wins 1000
+                (1, 2000, false, true), // User 1 loses 2000
+                (0, 500, false, false), // User 0 wins 500
             ],
             initial_balances,
             100000,
@@ -381,7 +385,10 @@ mod tests {
         );
 
         let result = generator.generate_witness(&batch);
-        assert!(matches!(result, Err(WitnessError::InsufficientBalance { .. })));
+        assert!(matches!(
+            result,
+            Err(WitnessError::InsufficientBalance { .. })
+        ));
     }
 
     #[test]
@@ -406,8 +413,8 @@ mod tests {
         let batch = create_test_settlement_batch(
             1,
             vec![
-                (0, 1000, true, true),   // User 0 wins 1000
-                (1, 1000, false, true),  // User 1 loses 1000
+                (0, 1000, true, true),  // User 0 wins 1000
+                (1, 1000, false, true), // User 1 loses 1000
             ],
             initial_balances,
             50000,

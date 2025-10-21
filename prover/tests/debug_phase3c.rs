@@ -1,6 +1,6 @@
 use prover::circuits::accounting::{AccountingCircuit, Bet};
-use prover::witness_generator::{create_test_settlement_batch, WitnessGenerator};
 use prover::proof_generator::ProofGenerator;
+use prover::witness_generator::{create_test_settlement_batch, WitnessGenerator};
 use std::collections::HashMap;
 
 #[test]
@@ -28,7 +28,7 @@ fn test_simple_single_bet_proof() {
     // Debug: Generate witness manually
     let witness_generator = WitnessGenerator::new(5, 3);
     let circuit = witness_generator.generate_witness(&batch).unwrap();
-    
+
     println!("Generated circuit:");
     println!("  batch_id: {:?}", circuit.batch_id);
     println!("  initial_balances: {:?}", circuit.initial_balances);
@@ -38,9 +38,9 @@ fn test_simple_single_bet_proof() {
     println!("  bets: {:?}", circuit.bets);
 
     // Try direct circuit proof
-    use ark_groth16::Groth16;
-    use ark_snark::{SNARK, CircuitSpecificSetupSNARK};
     use ark_bn254::{Bn254, Fr};
+    use ark_groth16::Groth16;
+    use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
     use ark_std::rand::thread_rng;
 
     println!("✓ Testing direct circuit proof generation");
@@ -76,10 +76,10 @@ fn test_manual_circuit_construction() {
 
     // Create circuit manually with known values
     let bet = Bet::new(0, 1000, true, true); // User 0, 1000 amount, guess heads, outcome heads (win)
-    
+
     let initial_balances = [10000u64, 0, 0]; // User 0 has 10k, others have 0
-    let final_balances = [11000u64, 0, 0];   // User 0 gains 1k from win
-    
+    let final_balances = [11000u64, 0, 0]; // User 0 gains 1k from win
+
     let circuit = AccountingCircuit::new(
         vec![bet],
         1, // batch_id
@@ -97,9 +97,9 @@ fn test_manual_circuit_construction() {
     println!("  house_final: {:?}", circuit.house_final);
 
     // Test this circuit
-    use ark_groth16::Groth16;
-    use ark_snark::{SNARK, CircuitSpecificSetupSNARK};
     use ark_bn254::{Bn254, Fr};
+    use ark_groth16::Groth16;
+    use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
     use ark_std::rand::thread_rng;
 
     let mut rng = thread_rng();
@@ -126,15 +126,30 @@ fn test_conservation_validation() {
 
     // Test case: User wins 1000, house loses 1000
     let bet = Bet::new(0, 1000, true, true);
-    println!("Bet: user_id={}, amount={}, guess={}, outcome={}, won={}", 
-             bet.user_id, bet.amount, bet.guess, bet.outcome, bet.won());
+    println!(
+        "Bet: user_id={}, amount={}, guess={}, outcome={}, won={}",
+        bet.user_id,
+        bet.amount,
+        bet.guess,
+        bet.outcome,
+        bet.won()
+    );
 
-    let user_delta = if bet.won() { bet.amount as i64 } else { -(bet.amount as i64) };
+    let user_delta = if bet.won() {
+        bet.amount as i64
+    } else {
+        -(bet.amount as i64)
+    };
     let house_delta = -user_delta;
 
     println!("User delta: {}", user_delta);
     println!("House delta: {}", house_delta);
-    println!("Conservation check: {} + {} = {}", user_delta, house_delta, user_delta + house_delta);
+    println!(
+        "Conservation check: {} + {} = {}",
+        user_delta,
+        house_delta,
+        user_delta + house_delta
+    );
 
     assert_eq!(user_delta + house_delta, 0, "Conservation should hold");
     println!("✓ Conservation validated");

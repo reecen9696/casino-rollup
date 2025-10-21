@@ -446,7 +446,7 @@
         },
         "3d_on_chain_verification": {
           "description": "Embed verifying key in Solana program and implement BN254 proof verification",
-          "status": "not_started",
+          "status": "in_progress",
           "requirements_ref": "embed VK; BN254 pairing syscall; verify_and_settle checks proof",
           "acceptance_criteria": [
             "Verifying key embedded in verifier program",
