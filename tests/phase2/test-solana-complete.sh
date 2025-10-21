@@ -375,7 +375,12 @@ echo "Validator:    solana cluster-version --url localhost"
 
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services${NC}"
 
-# Keep script running until user interrupts
-while true; do
-    sleep 1
-done
+# Keep script running until user interrupts (unless in test mode)
+if [ "${TEST_MODE:-false}" != "true" ]; then
+    while true; do
+        sleep 1
+    done
+else
+    # In test mode, just wait a moment for final cleanup
+    sleep 2
+fi

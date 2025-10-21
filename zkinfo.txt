@@ -1,0 +1,79 @@
+Recommendation: Arkworks Groth16 (BN254) for the MVP accounting circuit. This aligns with Solana’s pairing-friendly curve (alt_bn128) support  and allows a straightforward Groth16 proof. We will design the circuit in Arkworks with simple constraints (win/loss booleans, balance updates) and generate a trusted setup once. This gives a minimal, high-performance implementation with well-understood behavior.
+
+We will keep our code modular so that future enhancements (e.g. switching to SP1 for VRF/signature verification) are feasible. In particular, we will structure the circuit and witness generation to be as generic as possible. In Phase 3a we will implement a Hello World or minimal proof (e.g. a constant multiplication) to validate the toolchain, then a basic “one bet” circuit before expanding to batches.
+
+Hello World Circuit Example (Arkworks)
+
+As a concrete start, we can use Arkworks to prove a trivial statement. For instance, proving knowledge of two factors a, b such that a * b = c (where c is public) is analogous to verifying a balance update old_balance - bet = new_balance. In Rust with Arkworks this looks like:
+
+use ark_bn254::Bn254;
+use ark_groth16::{Groth16, prepare_verifying_key};
+use ark_ff::PrimeField;
+use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef};
+use ark_serialize::CanonicalSerialize;
+
+// A simple circuit: prove a * b = c.
+struct MulCircuit<F: PrimeField> {
+    // Private inputs
+    pub a: F,
+    pub b: F,
+    // Public input
+    pub c: F,
+}
+
+impl<F: PrimeField> ConstraintSynthesizer<F> for MulCircuit<F> {
+    fn generate_constraints(self, cs: ConstraintSystemRef<F>) -> ark_relations::r1cs::Result<()> {
+        // Allocate private vars
+        let a_var = ark_relations::r1cs::ConstraintSystem::new_input(cs.clone(), || Ok(self.a))?;
+        let b_var = ark_relations::r1cs::ConstraintSystem::new_input(cs.clone(), || Ok(self.b))?;
+        // Compute product
+        let product = a_var * b_var;
+        // Enforce a * b = c
+        product.enforce_equal(&ark_relations::r1cs::ConstraintSystem::new_input(cs, || Ok(self.c))?);
+        Ok(())
+    }
+}
+
+fn main() {
+    // Example inputs
+    let a = Bn254::Fr::from(3u128);
+    let b = Bn254::Fr::from(7u128);
+    let c = Bn254::Fr::from(21u128); // public
+
+    // Trusted setup (for demo; use secure RNG/ceremony in production)
+    let mut rng = rand::thread_rng();
+    let pk = Groth16::<Bn254>::generate_random_parameters(MulCircuit { a, b, c }, &mut rng).unwrap();
+    let pvk = prepare_verifying_key(&pk.vk);
+
+    // Prover: create a proof
+    let proof = Groth16::prove(&pk, MulCircuit { a, b, c }, &mut rng).unwrap();
+
+    // Verifier: check proof
+    let public_inputs = vec![c]; // only 'c' is public
+    assert!(Groth16::verify_with_processed_vk(&pvk, &public_inputs, &proof).unwrap());
+    println!("Proof verified!");
+}
+
+This code (inspired by Arkworks docs) demonstrates a complete Groth16 setup: generating keys, proving, and verifying . For our coinflip circuit, we would similarly allocate variables for each bet’s outcome, amounts, and enforce balance relations. Once the circuit is correct, we’ll serialize the verifying key and embed it in our Solana program (e.g. as a constant or account data).
+
+Implementation Plan
+	1.	Set up ZK toolchain: Add Arkworks dependencies (ark-ff, ark-relations, ark-groth16, ark-bn254) to the prover Rust crate. Ensure we can compile and run a simple example like above.
+	2.	Hello-world proof generation: Write a quick Rust test (like the multiplication circuit above) to generate a proof and verify it locally. Confirm using Arkworks API that proofs/keys work (cf. Sui example ). Measure proof time and memory for a trivial circuit to set a baseline.
+	3.	Anchor verifier program: In the Solana verifier program, embed the verifying key (BN254 VK) as bytes. Use the groth16-solana crate (Light Protocol) and ark-bn254 to verify the proof on-chain . Write an instruction verify_and_settle that takes a serialized proof and public inputs (packed into transaction data or accounts). On success, it should update balances; on failure, abort. Test this on a localnet using solana-program-test.
+	4.	Simple coinflip circuit: Build the minimal accounting circuit in Arkworks (multiple constraints for each bet in a batch). For N bets, the circuit will enforce each bet_outcome is boolean and apply balance deltas. Initially support a small fixed N (e.g. N=1 for proof of concept). Write unit tests to ensure invalid inputs fail proof generation (e.g. incorrect balances).
+	5.	Witness generation: In the sequencer code, collect a batch of bets and produce “witness inputs” for the circuit: initial balances, bet outcomes, amounts, and final balances. Compute the SNARK witness and call Groth16::prove. Serialize the proof and public inputs.
+	6.	On-chain verify + state update: The sequencer submits a Solana transaction to the Verifier program with the proof and public inputs. The program verifies via groth16-solana. If valid, it updates each user’s Vault PDA: check on-chain old_balance equals proof’s public old balance, then set to new balance. Also update house vault. This double-check ensures binding between on-chain state and proof .
+	7.	Performance and iteration: Measure proof generation time (ideally seconds for batch size) and on-chain verify CU. Arkworks Groth16 on BN254 is efficient; prior art (Light Protocol) notes ~200K CU per verify . Keep batches small if needed to meet <300K CU. Iterate circuit optimizations if CU is high.
+	8.	Future hooks: Leave the circuit code structured to allow adding constraints later (e.g. verify ed25519 sigs or VRF outputs). For VRF, we may later integrate an ed25519 verification gadget in Arkworks or switch to SP1 for that part. For now, the sequencer will trust the off-chain VRF and include its results as witness (with auditing of VRF proofs externally).
+	9.	Documentation & tests: Document the framework choice and circuit design (why BN254, how to handle multi-batch inputs, account mapping). Write unit and integration tests: off-chain proof verify, and on-chain successful/failed proof cases. Use solana-program-test to simulate transactions.
+
+References
+	•	Arkworks Groth16 example (factoring circuit in Rust) .
+https://docs.sui.io/guides/developer/cryptography/groth16#:~:text=%2F%2F%20Create%20proof%20let%20proof,Bn254%3E%3A%3Aprove%28%26pk%2C%20circuit%2C%20%26mut%20rng%29.unwrap
+	•	SP1 zkVM example (compiling Rust to ELF, generating Groth16 proof)  .
+https://medium.com/@catman675to/your-first-sp1-program-step-by-step-63ea480e41ad#:~:text=%2F%2F%20generate%20the%20proof%20for,proof%20generation%20failed
+	•	Solana ZK support: Poseidon and alt_bn128 syscalls for BN254/Groth16  .
+https://www.helius.dev/blog/zero-knowledge-proofs-its-applications-on-solana
+	•	On-chain verifier crate: Light Protocol’s groth16-solana with ark-bn254 .
+https://github.com/succinctlabs/sp1-solana#:~:text=Acknowledgements
+

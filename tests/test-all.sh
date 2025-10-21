@@ -236,7 +236,7 @@ if [ "$RUN_PHASE2" = true ]; then
     fi
     
     echo -e "${YELLOW}Running: Complete Solana Integration${NC}"
-    if "$SCRIPT_DIR/phase2/test-solana-complete.sh"; then
+    if TEST_MODE=true "$SCRIPT_DIR/phase2/test-solana-complete.sh"; then
         print_test_result "Complete Solana Integration" "PASS"
     else
         print_test_result "Complete Solana Integration" "FAIL"
