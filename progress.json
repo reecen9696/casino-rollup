@@ -277,7 +277,7 @@
           "implementation_notes": [
             "✓ Enhanced Vault program with comprehensive PDA structures",
             "✓ User vault accounts with SOL/USDC balance tracking",
-            "✓ Deposit/withdraw instructions with proper validation", 
+            "✓ Deposit/withdraw instructions with proper validation",
             "✓ Balance update system for settlement integration",
             "✓ Event emission for all operations",
             "✓ Verifier program with verify_and_settle instruction",
@@ -291,7 +291,7 @@
         },
         "sequencer_solana_integration": {
           "description": "Sequencer can submit tx to testnet (placeholder proofs)",
-          "status": "completed", 
+          "status": "completed",
           "requirements_ref": "sequencer can submit a tx (placeholder)",
           "implementation_notes": [
             "✓ Created sequencer/src/solana.rs with RPC client",
@@ -312,7 +312,7 @@
       },
       "exit_criteria": [
         "✓ localnet tx pipeline ready (sequencer → verifier program)",
-        "✓ events ready for testnet visibility", 
+        "✓ events ready for testnet visibility",
         "✓ program constraints implemented and tested",
         "✓ sequencer can submit placeholder transactions"
       ]

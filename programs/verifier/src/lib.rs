@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::sysvar::instructions;
+use anchor_lang::solana_program::hash;
 
-declare_id!("11111111111111111111111111111112");
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 #[program]
 pub mod verifier {
@@ -87,7 +88,7 @@ pub mod verifier {
             sequencer: ctx.accounts.sequencer.key(),
             batch_size: batch_data.bets.len() as u32,
             house_delta: total_house_delta,
-            proof_hash: solana_program::hash::hash(&proof).to_bytes(),
+            proof_hash: hash::hash(&proof).to_bytes(),
             settlement_timestamp: Clock::get()?.unix_timestamp,
         });
         
@@ -118,7 +119,7 @@ pub mod verifier {
         msg!("Proof verification placeholder: {} bytes", proof.len());
         
         emit!(ProofVerificationEvent {
-            proof_hash: solana_program::hash::hash(&proof).to_bytes(),
+            proof_hash: hash::hash(&proof).to_bytes(),
             verifier: ctx.accounts.verifier_state.key(),
             is_valid: true, // Placeholder: always true in Phase 2
             timestamp: Clock::get()?.unix_timestamp,
