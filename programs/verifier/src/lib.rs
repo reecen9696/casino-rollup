@@ -2,6 +2,12 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::hash;
 use anchor_lang::solana_program::sysvar::instructions;
 
+mod groth16;
+mod verifying_key;
+
+use groth16::{verify_groth16_proof, Groth16Proof};
+use verifying_key::get_embedded_verifying_key;
+
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 #[program]
@@ -43,13 +49,43 @@ pub mod verifier {
 
         let verifier_state = &mut ctx.accounts.verifier_state;
 
-        // Phase 2: Stub proof verification (just validate format)
-        // In Phase 3, this will include real ZK proof verification
+        // Phase 3d: Real ZK proof verification using Groth16 and BN254 syscalls
         msg!(
-            "Processing batch with {} bets and {} byte proof",
+            "Verifying batch with {} bets using Groth16 proof ({} bytes)",
             batch_data.bets.len(),
             proof.len()
         );
+
+        // Parse and verify the Groth16 proof
+        let groth16_proof =
+            Groth16Proof::from_bytes(&proof).map_err(|_| VerifierError::InvalidProofFormat)?;
+
+        // Load embedded verifying key
+        let verifying_key =
+            get_embedded_verifying_key().map_err(|_| VerifierError::InvalidVerifyingKey)?;
+
+        // Prepare public inputs for verification
+        // For our circuit, we expect one public input: the batch hash
+        let batch_hash = compute_batch_hash(&batch_data);
+        let public_inputs = vec![batch_hash];
+
+        // Perform Groth16 verification
+        let verification_result =
+            verify_groth16_proof(&groth16_proof, &verifying_key, &public_inputs);
+
+        match verification_result {
+            Ok(true) => {
+                msg!("✓ Groth16 proof verification successful");
+            }
+            Ok(false) => {
+                msg!("✗ Groth16 proof verification failed: invalid proof");
+                return Err(VerifierError::InvalidProof.into());
+            }
+            Err(e) => {
+                msg!("✗ Groth16 proof verification error: {:?}", e);
+                return Err(VerifierError::ProofVerificationFailed.into());
+            }
+        }
 
         // Validate batch arithmetic (basic checks for Phase 2)
         let mut total_house_delta: i64 = 0;
@@ -129,7 +165,7 @@ pub mod verifier {
         Ok(())
     }
 
-    /// Verify a single ZK proof (Phase 3+ implementation)
+    /// Verify a single ZK proof (Phase 3d implementation with real Groth16)
     pub fn verify_proof(ctx: Context<VerifyProof>, proof: Vec<u8>) -> Result<()> {
         require!(
             !ctx.accounts.verifier_state.is_paused,
@@ -138,17 +174,51 @@ pub mod verifier {
         require!(!proof.is_empty(), VerifierError::EmptyProof);
         require!(proof.len() <= MAX_PROOF_SIZE, VerifierError::ProofTooLarge);
 
-        // Phase 2: Stub verification
-        // Phase 3: Real Groth16/PLONK verification using Solana's BN254 syscalls
+        // Phase 3d: Real Groth16 verification using Solana's BN254 syscalls
+        msg!(
+            "Performing Groth16 proof verification: {} bytes",
+            proof.len()
+        );
 
-        msg!("Proof verification placeholder: {} bytes", proof.len());
+        // Parse the Groth16 proof
+        let groth16_proof =
+            Groth16Proof::from_bytes(&proof).map_err(|_| VerifierError::InvalidProofFormat)?;
+
+        // Load embedded verifying key
+        let verifying_key =
+            get_embedded_verifying_key().map_err(|_| VerifierError::InvalidVerifyingKey)?;
+
+        // For standalone proof verification, we need public inputs
+        // This would typically be provided as additional parameters
+        // For now, use empty public inputs (circuit dependent)
+        let public_inputs: Vec<[u8; 32]> = vec![];
+
+        // Perform Groth16 verification
+        let is_valid = match verify_groth16_proof(&groth16_proof, &verifying_key, &public_inputs) {
+            Ok(valid) => {
+                if valid {
+                    msg!("✓ Groth16 proof verification successful");
+                } else {
+                    msg!("✗ Groth16 proof verification failed: invalid proof");
+                }
+                valid
+            }
+            Err(e) => {
+                msg!("✗ Groth16 proof verification error: {:?}", e);
+                return Err(VerifierError::ProofVerificationFailed.into());
+            }
+        };
 
         emit!(ProofVerificationEvent {
             proof_hash: hash::hash(&proof).to_bytes(),
             verifier: ctx.accounts.verifier_state.key(),
-            is_valid: true, // Placeholder: always true in Phase 2
+            is_valid,
             timestamp: Clock::get()?.unix_timestamp,
         });
+
+        if !is_valid {
+            return Err(VerifierError::InvalidProof.into());
+        }
 
         Ok(())
     }
@@ -308,6 +378,30 @@ pub struct ProofVerificationEvent {
     pub timestamp: i64,
 }
 
+/// Compute the batch hash for use as public input to the ZK circuit
+fn compute_batch_hash(batch_data: &BatchSettlementData) -> [u8; 32] {
+    // Serialize batch data for hashing
+    let mut hasher_data = Vec::new();
+
+    // Add batch metadata
+    hasher_data.extend_from_slice(&batch_data.batch_id.to_le_bytes());
+    hasher_data.extend_from_slice(&(batch_data.bets.len() as u32).to_le_bytes());
+
+    // Add each bet settlement data
+    for bet in &batch_data.bets {
+        hasher_data.extend_from_slice(&bet.bet_id.to_le_bytes());
+        hasher_data.extend_from_slice(&bet.user.to_bytes());
+        hasher_data.extend_from_slice(&bet.bet_amount.to_le_bytes());
+        hasher_data.push(bet.user_guess);
+        hasher_data.push(bet.outcome);
+        hasher_data.extend_from_slice(&bet.payout.to_le_bytes());
+    }
+
+    // Hash the serialized data
+    let hash_result = hash::hash(&hasher_data);
+    hash_result.to_bytes()
+}
+
 // Error codes
 #[error_code]
 pub enum VerifierError {
@@ -339,6 +433,10 @@ pub enum VerifierError {
     InvalidSequencer,
     #[msg("Proof verification failed")]
     ProofVerificationFailed,
+    #[msg("Invalid proof - verification returned false")]
+    InvalidProof,
+    #[msg("Invalid verifying key")]
+    InvalidVerifyingKey,
 }
 
 #[cfg(test)]
