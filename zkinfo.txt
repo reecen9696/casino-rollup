@@ -1,3 +1,4 @@
+
 Recommendation: Arkworks Groth16 (BN254) for the MVP accounting circuit. This aligns with Solana’s pairing-friendly curve (alt_bn128) support  and allows a straightforward Groth16 proof. We will design the circuit in Arkworks with simple constraints (win/loss booleans, balance updates) and generate a trusted setup once. This gives a minimal, high-performance implementation with well-understood behavior.
 
 We will keep our code modular so that future enhancements (e.g. switching to SP1 for VRF/signature verification) are feasible. In particular, we will structure the circuit and witness generation to be as generic as possible. In Phase 3a we will implement a Hello World or minimal proof (e.g. a constant multiplication) to validate the toolchain, then a basic “one bet” circuit before expanding to batches.
@@ -77,3 +78,6 @@ https://www.helius.dev/blog/zero-knowledge-proofs-its-applications-on-solana
 	•	On-chain verifier crate: Light Protocol’s groth16-solana with ark-bn254 .
 https://github.com/succinctlabs/sp1-solana#:~:text=Acknowledgements
 
+https://github.com/arkworks-rs/circom-compat
+
+https://docs.sui.io/guides/developer/cryptography/groth16#:~:text=%2F%2F%20Create%20proof%20let%20proof,Bn254%3E%3A%3Aprove%28%26pk%2C%20circuit%2C%20%26mut%20rng%29.unwrap

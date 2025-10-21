@@ -11,9 +11,15 @@ ark-ec.workspace = true
 ark-groth16.workspace = true
 ark-serialize.workspace = true
 ark-std.workspace = true
+ark-relations = "0.4"
+ark-snark = "0.4"
 
 # Utilities
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
+rand = "0.8"
+
+[dev-dependencies]
+criterion = "0.5"

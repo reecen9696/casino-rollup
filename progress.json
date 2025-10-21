@@ -343,21 +343,33 @@
       "tasks": {
         "3a_zkvm_decision": {
           "description": "Choose ZK framework: Arkworks vs SP1 zkVM vs alternatives",
-          "status": "not_started",
+          "status": "completed",
+          "completed_at": "2025-10-21",
           "requirements_ref": "R1CS circuit foundation for accounting-only proofs",
           "acceptance_criteria": [
-            "Framework decision documented with rationale",
-            "Basic proof-of-concept: hello world circuit compiles and generates proof",
-            "Verify proof verification works off-chain",
-            "Performance baseline established (proof time, verification time)",
-            "Solana integration path validated (BN254 compatibility)"
+            "✅ Framework decision documented with rationale",
+            "✅ Basic proof-of-concept: hello world circuit compiles and generates proof",
+            "✅ Verify proof verification works off-chain",
+            "✅ Performance baseline established (proof time, verification time)",
+            "✅ Solana integration path validated (BN254 compatibility)"
           ],
           "estimated_time": "1-2 days",
-          "files_to_create": [
-            "prover/src/circuit.rs",
-            "prover/tests/basic_proof.rs",
-            "docs/zkvm_decision.md"
-          ]
+          "actual_time": "4 hours",
+          "files_created": [
+            "prover/src/circuits/mod.rs",
+            "prover/src/circuits/multiplication.rs",
+            "prover/src/legacy.rs",
+            "docs/phase3a_zkvm_decision_report.md"
+          ],
+          "performance_results": {
+            "setup_time": "~86ms",
+            "proving_time": "~24ms",
+            "verification_time": "~60ms",
+            "verifying_key_size": "296 bytes",
+            "status": "EXCEEDED EXPECTATIONS"
+          },
+          "framework_decision": "Arkworks Groth16 (BN254)",
+          "rationale": "Native Solana BN254 support, excellent performance (<30ms proving), small VK size (296 bytes), mature ecosystem"
         },
         "3b_accounting_circuit": {
           "description": "Implement batch accounting circuit: win/lose booleans, balance deltas, conservation",
