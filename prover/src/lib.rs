@@ -2,6 +2,8 @@
 // Phase 3a: ZK Framework Decision - Arkworks Groth16 (BN254)
 
 pub mod circuits;
+pub mod witness_generator;
+pub mod proof_generator;
 
 // Legacy module for backward compatibility - will be phased out
 mod legacy;
