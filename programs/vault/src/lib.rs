@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
 declare_id!("11111111111111111111111111111111");
 
@@ -15,8 +14,11 @@ pub mod vault {
         vault_state.total_sol_deposited = 0;
         vault_state.total_usdc_deposited = 0;
         vault_state.is_paused = false;
-        
-        msg!("Vault initialized with authority: {}", vault_state.authority);
+
+        msg!(
+            "Vault initialized with authority: {}",
+            vault_state.authority
+        );
         Ok(())
     }
 
@@ -30,12 +32,14 @@ pub mod vault {
         user_vault.total_winnings = 0;
         user_vault.total_losses = 0;
         user_vault.created_at = Clock::get()?.unix_timestamp;
-        
+
         // Update global vault state
         let vault_state = &mut ctx.accounts.vault_state;
-        vault_state.total_users = vault_state.total_users.checked_add(1)
+        vault_state.total_users = vault_state
+            .total_users
+            .checked_add(1)
             .ok_or(VaultError::MathOverflow)?;
-        
+
         msg!("User vault created for: {}", user_vault.owner);
         Ok(())
     }
@@ -44,16 +48,20 @@ pub mod vault {
     pub fn deposit_sol(ctx: Context<DepositSol>, amount: u64) -> Result<()> {
         require!(!ctx.accounts.vault_state.is_paused, VaultError::VaultPaused);
         require!(amount > 0, VaultError::InvalidAmount);
-        
+
         let user_vault = &mut ctx.accounts.user_vault;
-        user_vault.sol_balance = user_vault.sol_balance.checked_add(amount)
+        user_vault.sol_balance = user_vault
+            .sol_balance
+            .checked_add(amount)
             .ok_or(VaultError::MathOverflow)?;
-        
+
         // Update global state
         let vault_state = &mut ctx.accounts.vault_state;
-        vault_state.total_sol_deposited = vault_state.total_sol_deposited.checked_add(amount)
+        vault_state.total_sol_deposited = vault_state
+            .total_sol_deposited
+            .checked_add(amount)
             .ok_or(VaultError::MathOverflow)?;
-        
+
         emit!(DepositEvent {
             user: ctx.accounts.user.key(),
             token_type: TokenType::Sol,
@@ -61,8 +69,12 @@ pub mod vault {
             new_balance: user_vault.sol_balance,
             timestamp: Clock::get()?.unix_timestamp,
         });
-        
-        msg!("SOL deposit: {} lamports for user: {}", amount, ctx.accounts.user.key());
+
+        msg!(
+            "SOL deposit: {} lamports for user: {}",
+            amount,
+            ctx.accounts.user.key()
+        );
         Ok(())
     }
 
@@ -70,16 +82,20 @@ pub mod vault {
     pub fn deposit_usdc(ctx: Context<DepositUsdc>, amount: u64) -> Result<()> {
         require!(!ctx.accounts.vault_state.is_paused, VaultError::VaultPaused);
         require!(amount > 0, VaultError::InvalidAmount);
-        
+
         let user_vault = &mut ctx.accounts.user_vault;
-        user_vault.usdc_balance = user_vault.usdc_balance.checked_add(amount)
+        user_vault.usdc_balance = user_vault
+            .usdc_balance
+            .checked_add(amount)
             .ok_or(VaultError::MathOverflow)?;
-        
+
         // Update global state
         let vault_state = &mut ctx.accounts.vault_state;
-        vault_state.total_usdc_deposited = vault_state.total_usdc_deposited.checked_add(amount)
+        vault_state.total_usdc_deposited = vault_state
+            .total_usdc_deposited
+            .checked_add(amount)
             .ok_or(VaultError::MathOverflow)?;
-        
+
         emit!(DepositEvent {
             user: ctx.accounts.user.key(),
             token_type: TokenType::Usdc,
@@ -87,8 +103,12 @@ pub mod vault {
             new_balance: user_vault.usdc_balance,
             timestamp: Clock::get()?.unix_timestamp,
         });
-        
-        msg!("USDC deposit: {} tokens for user: {}", amount, ctx.accounts.user.key());
+
+        msg!(
+            "USDC deposit: {} tokens for user: {}",
+            amount,
+            ctx.accounts.user.key()
+        );
         Ok(())
     }
 
@@ -96,18 +116,25 @@ pub mod vault {
     pub fn withdraw_sol(ctx: Context<WithdrawSol>, amount: u64) -> Result<()> {
         require!(!ctx.accounts.vault_state.is_paused, VaultError::VaultPaused);
         require!(amount > 0, VaultError::InvalidAmount);
-        
+
         let user_vault = &mut ctx.accounts.user_vault;
-        require!(user_vault.sol_balance >= amount, VaultError::InsufficientBalance);
-        
-        user_vault.sol_balance = user_vault.sol_balance.checked_sub(amount)
+        require!(
+            user_vault.sol_balance >= amount,
+            VaultError::InsufficientBalance
+        );
+
+        user_vault.sol_balance = user_vault
+            .sol_balance
+            .checked_sub(amount)
             .ok_or(VaultError::MathUnderflow)?;
-        
+
         // Update global state
         let vault_state = &mut ctx.accounts.vault_state;
-        vault_state.total_sol_deposited = vault_state.total_sol_deposited.checked_sub(amount)
+        vault_state.total_sol_deposited = vault_state
+            .total_sol_deposited
+            .checked_sub(amount)
             .ok_or(VaultError::MathUnderflow)?;
-        
+
         emit!(WithdrawEvent {
             user: ctx.accounts.user.key(),
             token_type: TokenType::Sol,
@@ -115,8 +142,12 @@ pub mod vault {
             new_balance: user_vault.sol_balance,
             timestamp: Clock::get()?.unix_timestamp,
         });
-        
-        msg!("SOL withdrawal: {} lamports for user: {}", amount, ctx.accounts.user.key());
+
+        msg!(
+            "SOL withdrawal: {} lamports for user: {}",
+            amount,
+            ctx.accounts.user.key()
+        );
         Ok(())
     }
 
@@ -124,18 +155,25 @@ pub mod vault {
     pub fn withdraw_usdc(ctx: Context<WithdrawUsdc>, amount: u64) -> Result<()> {
         require!(!ctx.accounts.vault_state.is_paused, VaultError::VaultPaused);
         require!(amount > 0, VaultError::InvalidAmount);
-        
+
         let user_vault = &mut ctx.accounts.user_vault;
-        require!(user_vault.usdc_balance >= amount, VaultError::InsufficientBalance);
-        
-        user_vault.usdc_balance = user_vault.usdc_balance.checked_sub(amount)
+        require!(
+            user_vault.usdc_balance >= amount,
+            VaultError::InsufficientBalance
+        );
+
+        user_vault.usdc_balance = user_vault
+            .usdc_balance
+            .checked_sub(amount)
             .ok_or(VaultError::MathUnderflow)?;
-        
+
         // Update global state
         let vault_state = &mut ctx.accounts.vault_state;
-        vault_state.total_usdc_deposited = vault_state.total_usdc_deposited.checked_sub(amount)
+        vault_state.total_usdc_deposited = vault_state
+            .total_usdc_deposited
+            .checked_sub(amount)
             .ok_or(VaultError::MathUnderflow)?;
-        
+
         emit!(WithdrawEvent {
             user: ctx.accounts.user.key(),
             token_type: TokenType::Usdc,
@@ -143,8 +181,12 @@ pub mod vault {
             new_balance: user_vault.usdc_balance,
             timestamp: Clock::get()?.unix_timestamp,
         });
-        
-        msg!("USDC withdrawal: {} tokens for user: {}", amount, ctx.accounts.user.key());
+
+        msg!(
+            "USDC withdrawal: {} tokens for user: {}",
+            amount,
+            ctx.accounts.user.key()
+        );
         Ok(())
     }
 
@@ -157,43 +199,63 @@ pub mod vault {
         bet_amount: u64,
     ) -> Result<()> {
         require!(!ctx.accounts.vault_state.is_paused, VaultError::VaultPaused);
-        
+
         let user_vault = &mut ctx.accounts.user_vault;
-        
+
         // Update SOL balance
         if sol_delta >= 0 {
-            user_vault.sol_balance = user_vault.sol_balance.checked_add(sol_delta as u64)
+            user_vault.sol_balance = user_vault
+                .sol_balance
+                .checked_add(sol_delta as u64)
                 .ok_or(VaultError::MathOverflow)?;
         } else {
             let abs_delta = (-sol_delta) as u64;
-            require!(user_vault.sol_balance >= abs_delta, VaultError::InsufficientBalance);
-            user_vault.sol_balance = user_vault.sol_balance.checked_sub(abs_delta)
+            require!(
+                user_vault.sol_balance >= abs_delta,
+                VaultError::InsufficientBalance
+            );
+            user_vault.sol_balance = user_vault
+                .sol_balance
+                .checked_sub(abs_delta)
                 .ok_or(VaultError::MathUnderflow)?;
         }
-        
+
         // Update USDC balance
         if usdc_delta >= 0 {
-            user_vault.usdc_balance = user_vault.usdc_balance.checked_add(usdc_delta as u64)
+            user_vault.usdc_balance = user_vault
+                .usdc_balance
+                .checked_add(usdc_delta as u64)
                 .ok_or(VaultError::MathOverflow)?;
         } else {
             let abs_delta = (-usdc_delta) as u64;
-            require!(user_vault.usdc_balance >= abs_delta, VaultError::InsufficientBalance);
-            user_vault.usdc_balance = user_vault.usdc_balance.checked_sub(abs_delta)
+            require!(
+                user_vault.usdc_balance >= abs_delta,
+                VaultError::InsufficientBalance
+            );
+            user_vault.usdc_balance = user_vault
+                .usdc_balance
+                .checked_sub(abs_delta)
                 .ok_or(VaultError::MathUnderflow)?;
         }
-        
+
         // Update bet statistics
-        user_vault.bet_count = user_vault.bet_count.checked_add(1)
+        user_vault.bet_count = user_vault
+            .bet_count
+            .checked_add(1)
             .ok_or(VaultError::MathOverflow)?;
-        
+
         if is_win {
-            user_vault.total_winnings = user_vault.total_winnings.checked_add(bet_amount)
+            user_vault.total_winnings = user_vault
+                .total_winnings
+                .checked_add(bet_amount)
                 .ok_or(VaultError::MathOverflow)?;
         } else {
-            user_vault.total_losses = user_vault.total_losses.checked_add(bet_amount)
+            user_vault.total_losses = user_vault
+                .total_losses
+                .checked_add(bet_amount)
                 .ok_or(VaultError::MathOverflow)?;
         }
-        
+
         emit!(BalanceUpdateEvent {
             user: user_vault.owner,
             sol_delta,
@@ -204,9 +266,13 @@ pub mod vault {
             bet_count: user_vault.bet_count,
             timestamp: Clock::get()?.unix_timestamp,
         });
-        
-        msg!("Balance updated for user: {}, SOL: {}, USDC: {}", 
-             user_vault.owner, sol_delta, usdc_delta);
+
+        msg!(
+            "Balance updated for user: {}, SOL: {}, USDC: {}",
+            user_vault.owner,
+            sol_delta,
+            usdc_delta
+        );
         Ok(())
     }
 
@@ -214,7 +280,7 @@ pub mod vault {
     pub fn set_pause_state(ctx: Context<SetPauseState>, is_paused: bool) -> Result<()> {
         let vault_state = &mut ctx.accounts.vault_state;
         vault_state.is_paused = is_paused;
-        
+
         msg!("Vault pause state set to: {}", is_paused);
         Ok(())
     }
@@ -408,7 +474,7 @@ pub struct BalanceUpdateEvent {
 }
 
 // Enums
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq)]
 pub enum TokenType {
     Sol,
     Usdc,
@@ -445,7 +511,7 @@ mod tests {
     fn test_token_type_serialization() {
         let sol_type = TokenType::Sol;
         let usdc_type = TokenType::Usdc;
-        
+
         assert_ne!(sol_type, usdc_type);
         assert_eq!(sol_type, TokenType::Sol);
     }

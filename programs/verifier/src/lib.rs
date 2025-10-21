@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::sysvar::instructions;
 use anchor_lang::solana_program::hash;
+use anchor_lang::solana_program::sysvar::instructions;
 
 declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
@@ -16,8 +16,11 @@ pub mod verifier {
         verifier_state.total_batches_processed = 0;
         verifier_state.total_bets_settled = 0;
         verifier_state.is_paused = false;
-        
-        msg!("Verifier initialized with authority: {}", verifier_state.authority);
+
+        msg!(
+            "Verifier initialized with authority: {}",
+            verifier_state.authority
+        );
         Ok(())
     }
 
@@ -27,47 +30,60 @@ pub mod verifier {
         batch_data: BatchSettlementData,
         proof: Vec<u8>, // Placeholder proof for Phase 2
     ) -> Result<()> {
-        require!(!ctx.accounts.verifier_state.is_paused, VerifierError::VerifierPaused);
+        require!(
+            !ctx.accounts.verifier_state.is_paused,
+            VerifierError::VerifierPaused
+        );
         require!(!batch_data.bets.is_empty(), VerifierError::EmptyBatch);
-        require!(batch_data.bets.len() <= MAX_BATCH_SIZE, VerifierError::BatchTooLarge);
+        require!(
+            batch_data.bets.len() <= MAX_BATCH_SIZE,
+            VerifierError::BatchTooLarge
+        );
         require!(!proof.is_empty(), VerifierError::EmptyProof);
-        
+
         let verifier_state = &mut ctx.accounts.verifier_state;
-        
+
         // Phase 2: Stub proof verification (just validate format)
         // In Phase 3, this will include real ZK proof verification
-        msg!("Processing batch with {} bets and {} byte proof", 
-             batch_data.bets.len(), proof.len());
-        
+        msg!(
+            "Processing batch with {} bets and {} byte proof",
+            batch_data.bets.len(),
+            proof.len()
+        );
+
         // Validate batch arithmetic (basic checks for Phase 2)
         let mut total_house_delta: i64 = 0;
         for bet_settlement in &batch_data.bets {
-            require!(bet_settlement.bet_amount > 0, VerifierError::InvalidBetAmount);
-            
+            require!(
+                bet_settlement.bet_amount > 0,
+                VerifierError::InvalidBetAmount
+            );
+
             // Validate outcome is boolean (0 or 1)
             require!(
                 bet_settlement.outcome == 0 || bet_settlement.outcome == 1,
                 VerifierError::InvalidOutcome
             );
-            
+
             // Calculate payout based on outcome and bet amount
             let expected_payout = if bet_settlement.outcome == bet_settlement.user_guess {
                 bet_settlement.bet_amount * 2 // Win: 2x payout
             } else {
                 0 // Loss: no payout
             };
-            
+
             require!(
                 bet_settlement.payout == expected_payout,
                 VerifierError::InvalidPayout
             );
-            
+
             // Calculate delta for house (negative when user wins)
             let house_delta = bet_settlement.bet_amount as i64 - bet_settlement.payout as i64;
-            total_house_delta = total_house_delta.checked_add(house_delta)
+            total_house_delta = total_house_delta
+                .checked_add(house_delta)
                 .ok_or(VerifierError::MathOverflow)?;
         }
-        
+
         // Emit settlement event for each bet
         for bet_settlement in &batch_data.bets {
             emit!(BetSettlementEvent {
@@ -81,7 +97,7 @@ pub mod verifier {
                 timestamp: Clock::get()?.unix_timestamp,
             });
         }
-        
+
         // Emit batch settlement event
         emit!(BatchSettlementEvent {
             batch_id: batch_data.batch_id,
@@ -91,57 +107,72 @@ pub mod verifier {
             proof_hash: hash::hash(&proof).to_bytes(),
             settlement_timestamp: Clock::get()?.unix_timestamp,
         });
-        
+
         // Update verifier state
-        verifier_state.total_batches_processed = verifier_state.total_batches_processed
+        verifier_state.total_batches_processed = verifier_state
+            .total_batches_processed
             .checked_add(1)
             .ok_or(VerifierError::MathOverflow)?;
-        
-        verifier_state.total_bets_settled = verifier_state.total_bets_settled
+
+        verifier_state.total_bets_settled = verifier_state
+            .total_bets_settled
             .checked_add(batch_data.bets.len() as u64)
             .ok_or(VerifierError::MathOverflow)?;
-        
-        msg!("Batch {} settled successfully: {} bets, house delta: {}", 
-             batch_data.batch_id, batch_data.bets.len(), total_house_delta);
-        
+
+        msg!(
+            "Batch {} settled successfully: {} bets, house delta: {}",
+            batch_data.batch_id,
+            batch_data.bets.len(),
+            total_house_delta
+        );
+
         Ok(())
     }
 
     /// Verify a single ZK proof (Phase 3+ implementation)
     pub fn verify_proof(ctx: Context<VerifyProof>, proof: Vec<u8>) -> Result<()> {
-        require!(!ctx.accounts.verifier_state.is_paused, VerifierError::VerifierPaused);
+        require!(
+            !ctx.accounts.verifier_state.is_paused,
+            VerifierError::VerifierPaused
+        );
         require!(!proof.is_empty(), VerifierError::EmptyProof);
         require!(proof.len() <= MAX_PROOF_SIZE, VerifierError::ProofTooLarge);
-        
+
         // Phase 2: Stub verification
         // Phase 3: Real Groth16/PLONK verification using Solana's BN254 syscalls
-        
+
         msg!("Proof verification placeholder: {} bytes", proof.len());
-        
+
         emit!(ProofVerificationEvent {
             proof_hash: hash::hash(&proof).to_bytes(),
             verifier: ctx.accounts.verifier_state.key(),
             is_valid: true, // Placeholder: always true in Phase 2
             timestamp: Clock::get()?.unix_timestamp,
         });
-        
+
         Ok(())
     }
 
     /// Pause/unpause verifier operations (admin only)
-    pub fn set_verifier_pause_state(ctx: Context<SetVerifierPauseState>, is_paused: bool) -> Result<()> {
+    pub fn set_verifier_pause_state(
+        ctx: Context<SetVerifierPauseState>,
+        is_paused: bool,
+    ) -> Result<()> {
         let verifier_state = &mut ctx.accounts.verifier_state;
         verifier_state.is_paused = is_paused;
-        
+
         msg!("Verifier pause state set to: {}", is_paused);
         Ok(())
     }
 
     /// Update vault program address (admin only)
-    pub fn update_vault_program(ctx: Context<UpdateVaultProgram>, new_vault_program: Pubkey) -> Result<()> {
+    pub fn update_vault_program(
+        ctx: Context<UpdateVaultProgram>,
+        new_vault_program: Pubkey,
+    ) -> Result<()> {
         let verifier_state = &mut ctx.accounts.verifier_state;
         verifier_state.vault_program = new_vault_program;
-        
+
         msg!("Vault program updated to: {}", new_vault_program);
         Ok(())
     }
@@ -333,7 +364,7 @@ mod tests {
             outcome: 1,
             payout: 2000,
         };
-        
+
         assert_eq!(bet.bet_amount, 1000);
         assert_eq!(bet.payout, 2000);
         assert_eq!(bet.outcome, bet.user_guess);
@@ -341,8 +372,12 @@ mod tests {
 
     #[test]
     fn test_batch_size_constraints() {
-        assert!(MAX_BATCH_SIZE > 0);
-        assert!(MAX_BATCH_SIZE <= 1000); // Reasonable upper bound
-        assert!(MAX_PROOF_SIZE > 0);
+        // Validate constants are reasonable
+        assert!(MAX_BATCH_SIZE > 0, "MAX_BATCH_SIZE must be positive");
+        assert!(
+            MAX_BATCH_SIZE <= 1000,
+            "MAX_BATCH_SIZE should be reasonable"
+        );
+        assert!(MAX_PROOF_SIZE > 0, "MAX_PROOF_SIZE must be positive");
     }
 }

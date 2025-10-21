@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use log::{info, warn};
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
@@ -10,7 +11,6 @@ use solana_sdk::{
 };
 use std::str::FromStr;
 use tokio::time::{sleep, Duration};
-use log::{info, warn};
 
 /// Solana client configuration
 #[derive(Debug, Clone)]
@@ -42,7 +42,7 @@ impl SolanaConfig {
             retry_delay_ms: 2000,
         }
     }
-    
+
     /// Create config for Solana Devnet
     pub fn devnet() -> Self {
         Self {
@@ -72,12 +72,12 @@ impl SolanaClient {
         verifier_program_id: &str,
     ) -> Result<Self> {
         let client = RpcClient::new_with_commitment(config.rpc_url.clone(), config.commitment);
-        
+
         let vault_program_id = Pubkey::from_str(vault_program_id)
             .map_err(|e| anyhow!("Invalid vault program ID: {}", e))?;
         let verifier_program_id = Pubkey::from_str(verifier_program_id)
             .map_err(|e| anyhow!("Invalid verifier program ID: {}", e))?;
-        
+
         Ok(Self {
             client,
             config,
@@ -100,10 +100,14 @@ impl SolanaClient {
             move || {
                 let client = RpcClient::new_with_commitment(rpc_url, commitment);
                 let version = client.get_version()?;
-                info!("Connected to Solana cluster version: {}", version.solana_core);
+                info!(
+                    "Connected to Solana cluster version: {}",
+                    version.solana_core
+                );
                 Ok::<(), anyhow::Error>(())
             }
-        }).await??;
+        })
+        .await??;
         Ok(())
     }
 
@@ -117,7 +121,8 @@ impl SolanaClient {
                 let client = RpcClient::new_with_commitment(rpc_url, commitment);
                 client.get_balance(&pubkey)
             }
-        }).await??;
+        })
+        .await??;
         Ok(balance)
     }
 
@@ -127,13 +132,16 @@ impl SolanaClient {
         batch_data: BatchSettlementData,
         proof: Vec<u8>,
     ) -> Result<Signature> {
-        info!("Submitting settlement batch {} with {} bets", 
-              batch_data.batch_id, batch_data.bets.len());
+        info!(
+            "Submitting settlement batch {} with {} bets",
+            batch_data.batch_id,
+            batch_data.bets.len()
+        );
 
         let instruction = self.create_verify_and_settle_instruction(batch_data, proof)?;
-        
+
         let signature = self.send_transaction_with_retry(vec![instruction]).await?;
-        
+
         info!("Settlement batch submitted successfully: {}", signature);
         Ok(signature)
     }
@@ -145,24 +153,22 @@ impl SolanaClient {
         proof: Vec<u8>,
     ) -> Result<Instruction> {
         // Derive verifier state PDA
-        let (verifier_state, _) = Pubkey::find_program_address(
-            &[b"verifier_state"],
-            &self.verifier_program_id,
-        );
+        let (verifier_state, _) =
+            Pubkey::find_program_address(&[b"verifier_state"], &self.verifier_program_id);
 
         // Create instruction data
         let mut instruction_data = Vec::new();
-        
+
         // Add instruction discriminator (8 bytes for verify_and_settle)
         // This would be computed from the method name hash in a real implementation
         instruction_data.extend_from_slice(&[0x12, 0x34, 0x56, 0x78, 0xab, 0xcd, 0xef, 0x90]);
-        
+
         // Serialize batch data and proof (simplified for Phase 2)
         let serialized_batch = serde_json::to_vec(&batch_data)
             .map_err(|e| anyhow!("Failed to serialize batch data: {}", e))?;
         instruction_data.extend_from_slice(&(serialized_batch.len() as u32).to_le_bytes());
         instruction_data.extend_from_slice(&serialized_batch);
-        
+
         instruction_data.extend_from_slice(&(proof.len() as u32).to_le_bytes());
         instruction_data.extend_from_slice(&proof);
 
@@ -180,7 +186,10 @@ impl SolanaClient {
     }
 
     /// Send transaction with retry logic
-    async fn send_transaction_with_retry(&self, instructions: Vec<Instruction>) -> Result<Signature> {
+    async fn send_transaction_with_retry(
+        &self,
+        instructions: Vec<Instruction>,
+    ) -> Result<Signature> {
         for attempt in 1..=self.config.retry_attempts {
             match self.send_transaction(instructions.clone()).await {
                 Ok(signature) => return Ok(signature),
@@ -203,13 +212,13 @@ impl SolanaClient {
             let commitment = self.config.commitment;
             let sequencer_keypair = Keypair::from_bytes(&self.sequencer_keypair.to_bytes())
                 .map_err(|e| anyhow!("Failed to clone keypair: {}", e))?;
-            
+
             move || -> Result<(solana_sdk::hash::Hash, Signature)> {
                 let client = RpcClient::new_with_commitment(rpc_url, commitment);
-                
+
                 // Get recent blockhash
                 let recent_blockhash = client.get_latest_blockhash()?;
-                
+
                 // Create and sign transaction
                 let transaction = Transaction::new_signed_with_payer(
                     &instructions,
@@ -217,21 +226,25 @@ impl SolanaClient {
                     &[&sequencer_keypair],
                     recent_blockhash,
                 );
-                
+
                 // Send transaction
                 let signature = client.send_and_confirm_transaction(&transaction)?;
                 Ok((recent_blockhash, signature))
             }
-        }).await??;
+        })
+        .await??;
 
-        info!("Transaction confirmed: {} (blockhash: {})", signature, recent_blockhash);
+        info!(
+            "Transaction confirmed: {} (blockhash: {})",
+            signature, recent_blockhash
+        );
         Ok(signature)
     }
 
     /// Submit a placeholder transaction for Phase 2 testing
     pub async fn submit_placeholder_settlement(&self, batch_id: u64) -> Result<Signature> {
         info!("Submitting placeholder settlement for batch {}", batch_id);
-        
+
         // Create dummy batch data for testing
         let batch_data = BatchSettlementData {
             batch_id,
@@ -255,10 +268,10 @@ impl SolanaClient {
                 },
             ],
         };
-        
+
         // Create dummy proof
         let dummy_proof = vec![0u8; 64]; // 64 bytes of zeros for Phase 2
-        
+
         self.submit_settlement_batch(batch_data, dummy_proof).await
     }
 
@@ -275,24 +288,31 @@ impl SolanaClient {
                     commitment: Some(CommitmentConfig::confirmed()),
                     max_supported_transaction_version: Some(0),
                 };
-                
+
                 let transaction = client.get_transaction_with_config(&signature, config)?;
-                
+
                 // Extract logs from the transaction metadata
                 let logs = if let Some(meta) = transaction.transaction.meta {
                     match meta.log_messages {
-                        solana_transaction_status::option_serializer::OptionSerializer::Some(logs) => logs,
-                        solana_transaction_status::option_serializer::OptionSerializer::None => Vec::new(),
-                        solana_transaction_status::option_serializer::OptionSerializer::Skip => Vec::new(),
+                        solana_transaction_status::option_serializer::OptionSerializer::Some(
+                            logs,
+                        ) => logs,
+                        solana_transaction_status::option_serializer::OptionSerializer::None => {
+                            Vec::new()
+                        }
+                        solana_transaction_status::option_serializer::OptionSerializer::Skip => {
+                            Vec::new()
+                        }
                     }
                 } else {
                     Vec::new()
                 };
-                
+
                 Ok::<Vec<String>, anyhow::Error>(logs)
             }
-        }).await??;
-        
+        })
+        .await??;
+
         Ok(logs)
     }
 }
@@ -334,7 +354,7 @@ mod tests {
         let config = SolanaConfig::default();
         assert_eq!(config.rpc_url, "http://127.0.0.1:8899");
         assert_eq!(config.retry_attempts, 3);
-        
+
         let testnet_config = SolanaConfig::testnet();
         assert_eq!(testnet_config.rpc_url, "https://api.testnet.solana.com");
     }
@@ -344,18 +364,16 @@ mod tests {
         let batch = BatchSettlementData {
             batch_id: 123,
             sequencer_nonce: 456,
-            bets: vec![
-                BetSettlement {
-                    bet_id: 1,
-                    user: Pubkey::new_unique(),
-                    bet_amount: 1000,
-                    user_guess: 1,
-                    outcome: 1,
-                    payout: 2000,
-                },
-            ],
+            bets: vec![BetSettlement {
+                bet_id: 1,
+                user: Pubkey::new_unique(),
+                bet_amount: 1000,
+                user_guess: 1,
+                outcome: 1,
+                payout: 2000,
+            }],
         };
-        
+
         assert_eq!(batch.batch_id, 123);
         assert_eq!(batch.bets.len(), 1);
     }

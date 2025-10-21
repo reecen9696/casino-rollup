@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::time::interval;
-use tracing::{info, error, debug};
+use tracing::{debug, error, info};
 
 // Oracle proof data structure for ZK rollup integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,7 +68,7 @@ impl OracleClient {
     // Fetch oracle proof for ZK settlement (background processing pattern)
     pub async fn fetch_proof(&self, batch_id: String) -> Result<OracleProof> {
         debug!("Fetching oracle proof for batch: {}", batch_id);
-        
+
         // In production, this would make actual HTTP request to oracle service
         // For now, simulate oracle proof generation
         let proof = OracleProof {
@@ -93,14 +93,15 @@ impl OracleClient {
             // Simulate oracle randomness computation
             use rand::Rng;
             let mut rng = rand::thread_rng();
-            
+
             OracleRandomness {
                 request_id,
                 random_value: rng.gen(),
                 proof: vec![5, 6, 7, 8], // Simulated randomness proof
                 timestamp: Utc::now(),
             }
-        }).await?;
+        })
+        .await?;
 
         info!("Oracle randomness fetched: {}", randomness.random_value);
         Ok(randomness)
@@ -113,12 +114,13 @@ impl OracleClient {
         // CPU-intensive proof verification in background thread (VF Node pattern)
         let proof_data = proof.proof_data.clone();
         let signature = proof.signature.clone();
-        
+
         let verified = tokio::task::spawn_blocking(move || {
             // Simulate proof verification logic
             std::thread::sleep(Duration::from_millis(1)); // Simulate computation
             !proof_data.is_empty() && !signature.is_empty()
-        }).await?;
+        })
+        .await?;
 
         info!("Oracle proof verified: {} -> {}", proof.proof_id, verified);
         Ok(verified)
@@ -140,19 +142,19 @@ impl OracleManager {
     // Start oracle proof fetching service (background task)
     pub async fn start_proof_service(&self) -> Result<()> {
         info!("Starting oracle proof fetching service");
-        
+
         let client = self.client.clone();
-        
+
         // Background task for periodic oracle proof fetching (VF Node pattern)
         tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(30));
             let mut batch_counter = 1;
-            
+
             loop {
                 interval.tick().await;
-                
+
                 let batch_id = format!("batch_{}", batch_counter);
-                
+
                 match client.fetch_proof(batch_id.clone()).await {
                     Ok(proof) => {
                         // Verify the proof
@@ -165,7 +167,10 @@ impl OracleManager {
                                 error!("Oracle proof verification failed for batch {}", batch_id);
                             }
                             Err(e) => {
-                                error!("Oracle proof verification error for batch {}: {}", batch_id, e);
+                                error!(
+                                    "Oracle proof verification error for batch {}: {}",
+                                    batch_id, e
+                                );
                             }
                         }
                     }
@@ -173,7 +178,7 @@ impl OracleManager {
                         error!("Failed to fetch oracle proof for batch {}: {}", batch_id, e);
                     }
                 }
-                
+
                 batch_counter += 1;
             }
         });
@@ -195,7 +200,7 @@ mod tests {
     async fn test_oracle_proof_fetching() {
         let config = OracleConfig::default();
         let client = OracleClient::new(config);
-        
+
         let proof = client.fetch_proof("test_batch".to_string()).await.unwrap();
         assert_eq!(proof.bet_batch_id, "test_batch");
         assert!(proof.verified);
@@ -205,8 +210,11 @@ mod tests {
     async fn test_oracle_randomness() {
         let config = OracleConfig::default();
         let client = OracleClient::new(config);
-        
-        let randomness = client.fetch_randomness("test_request".to_string()).await.unwrap();
+
+        let randomness = client
+            .fetch_randomness("test_request".to_string())
+            .await
+            .unwrap();
         assert_eq!(randomness.request_id, "test_request");
         assert!(!randomness.proof.is_empty());
     }
@@ -215,7 +223,7 @@ mod tests {
     async fn test_proof_verification() {
         let config = OracleConfig::default();
         let client = OracleClient::new(config);
-        
+
         let proof = OracleProof {
             proof_id: "test_proof".to_string(),
             bet_batch_id: "test_batch".to_string(),
@@ -224,7 +232,7 @@ mod tests {
             timestamp: Utc::now(),
             verified: false,
         };
-        
+
         let verified = client.verify_proof(&proof).await.unwrap();
         assert!(verified);
     }

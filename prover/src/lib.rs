@@ -68,7 +68,9 @@ impl ZkProver {
         }
 
         // Proving will be implemented in Phase 3
-        Err(ProverError::ProofGenerationFailed("Not implemented yet".to_string()))
+        Err(ProverError::ProofGenerationFailed(
+            "Not implemented yet".to_string(),
+        ))
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -77,7 +79,9 @@ impl ZkProver {
 
     pub fn validate_inputs(&self, inputs: &[Fr]) -> Result<(), ProverError> {
         if inputs.is_empty() {
-            return Err(ProverError::InvalidInput("Empty inputs not allowed".to_string()));
+            return Err(ProverError::InvalidInput(
+                "Empty inputs not allowed".to_string(),
+            ));
         }
 
         if inputs.len() > 1000 {
@@ -98,7 +102,6 @@ impl Default for ZkProver {
 mod tests {
     use super::*;
     use ark_bn254::Fr;
-    use ark_ff::Field;
 
     #[test]
     fn test_prover_creation() {
@@ -127,10 +130,10 @@ mod tests {
         let prover = ZkProver::new();
         let inputs = vec![Fr::from(1u64)];
         let result = prover.prove(&inputs);
-        
+
         assert!(result.is_err());
         match result.unwrap_err() {
-            ProverError::NotInitialized => {},
+            ProverError::NotInitialized => {}
             _ => panic!("Expected NotInitialized error"),
         }
     }
@@ -140,10 +143,10 @@ mod tests {
         let prover = ZkProver::new();
         let inputs = vec![];
         let result = prover.prove(&inputs);
-        
+
         assert!(result.is_err());
         match result.unwrap_err() {
-            ProverError::InvalidInput(_) => {},
+            ProverError::InvalidInput(_) => {}
             _ => panic!("Expected InvalidInput error"),
         }
     }
@@ -153,7 +156,7 @@ mod tests {
         let prover = ZkProver::new();
         let inputs = vec![];
         let result = prover.validate_inputs(&inputs);
-        
+
         assert!(result.is_err());
         match result.unwrap_err() {
             ProverError::InvalidInput(msg) => assert!(msg.contains("Empty inputs")),
@@ -166,7 +169,7 @@ mod tests {
         let prover = ZkProver::new();
         let inputs = vec![Fr::from(1u64); 1001]; // Too many inputs
         let result = prover.validate_inputs(&inputs);
-        
+
         assert!(result.is_err());
         match result.unwrap_err() {
             ProverError::InvalidInput(msg) => assert!(msg.contains("Too many inputs")),
@@ -179,7 +182,7 @@ mod tests {
         let prover = ZkProver::new();
         let inputs = vec![Fr::from(1u64), Fr::from(2u64)];
         let result = prover.validate_inputs(&inputs);
-        
+
         assert!(result.is_ok());
     }
 
@@ -213,9 +216,9 @@ mod tests {
         let a = Fr::from(10u64);
         let b = Fr::from(20u64);
         let c = a + b;
-        
+
         assert_eq!(c, Fr::from(30u64));
-        
+
         let d = b - a;
         assert_eq!(d, Fr::from(10u64));
     }

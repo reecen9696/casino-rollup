@@ -16,4 +16,3 @@ default = []
 
 [dependencies]
 anchor-lang.workspace = true
-anchor-spl.workspace = true

@@ -1,35 +1,35 @@
 use anyhow::Result;
 use axum::{
-    extract::{State, Path, FromRequest, Request},
+    async_trait,
+    extract::{FromRequest, Path, Request, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
     Router,
-    async_trait,
 };
+use chrono::{DateTime, Utc};
 use clap::Parser;
+use parking_lot::Mutex;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+use solana_sdk::signature::Keypair;
+use solana_sdk::signer::Signer;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
-use tower_http::cors::{CorsLayer, Any};
-use tracing::{info, warn, error};
-use chrono::{DateTime, Utc};
-use rand::Rng;
+use tower_http::cors::{Any, CorsLayer};
+use tracing::{error, info, warn};
 use uuid::Uuid;
-use std::sync::atomic::{AtomicU64, Ordering};
-use parking_lot::Mutex;
-use solana_sdk::signature::Keypair;
-use solana_sdk::signer::Signer;
 
 mod database;
-use database::{Database, Bet, PlayerBalance, DatabaseError};
+use database::{Bet, Database, DatabaseError, PlayerBalance};
 
 mod oracle;
-use oracle::{OracleManager, OracleConfig, OracleClient};
+use oracle::{OracleClient, OracleConfig, OracleManager};
 
 mod solana;
-use solana::{SolanaClient, SolanaConfig, BatchSettlementData, BetSettlement};
+use solana::{BatchSettlementData, BetSettlement, SolanaClient, SolanaConfig};
 
 // Settlement queue for ZK proof batching (VF Node pattern)
 #[derive(Debug, Clone)]
@@ -79,7 +79,7 @@ pub type SettlementReceiver = mpsc::UnboundedReceiver<SettlementItem>;
 pub struct Args {
     #[arg(short, long, default_value = "3000")]
     pub port: u16,
-    
+
     #[arg(short, long, default_value = "sqlite:zkcasino.db")]
     pub database_url: String,
 }
@@ -222,53 +222,66 @@ pub async fn health_check() -> &'static str {
 
 // Settlement batch processor for ZK proof preparation (VF Node pattern)
 async fn process_settlement_batch(
-    batch: &[SettlementItem], 
+    batch: &[SettlementItem],
     stats: &SettlementStats,
     solana_client: Option<Arc<SolanaClient>>,
 ) {
     let start_time = std::time::Instant::now();
-    
+
     tracing::info!(
-        "Processing settlement batch of {} items for ZK proof generation", 
+        "Processing settlement batch of {} items for ZK proof generation",
         batch.len()
     );
-    
+
     // Update statistics
-    let batch_id = stats.total_batches_processed.fetch_add(1, Ordering::Relaxed) + 1;
-    stats.items_in_current_batch.fetch_sub(batch.len() as u64, Ordering::Relaxed);
+    let batch_id = stats
+        .total_batches_processed
+        .fetch_add(1, Ordering::Relaxed)
+        + 1;
+    stats
+        .items_in_current_batch
+        .fetch_sub(batch.len() as u64, Ordering::Relaxed);
     *stats.last_batch_processed_at.lock() = Some(Utc::now());
-    
+
     // Submit to Solana if client is available (Phase 2 integration)
     if let Some(solana_client) = solana_client {
         match submit_batch_to_solana(&*solana_client, batch_id, batch).await {
             Ok(signature) => {
-                info!("Batch {} submitted to Solana successfully: {}", batch_id, signature);
+                info!(
+                    "Batch {} submitted to Solana successfully: {}",
+                    batch_id, signature
+                );
             }
             Err(e) => {
-                error!("Failed to submit batch {} to Solana: {}. Continuing with local processing.", batch_id, e);
+                error!(
+                    "Failed to submit batch {} to Solana: {}. Continuing with local processing.",
+                    batch_id, e
+                );
             }
         }
     }
-    
+
     // TODO: Future ZK proof generation and oracle verification
     // For now, log the batch processing for oracle integration readiness
     for item in batch {
         tracing::debug!(
-            "Settlement item: bet_id={}, player={}, amount={}, payout={}", 
-            item.bet_id, 
-            item.player_address, 
-            item.amount, 
+            "Settlement item: bet_id={}, player={}, amount={}, payout={}",
+            item.bet_id,
+            item.player_address,
+            item.amount,
             item.payout
         );
     }
-    
+
     // Simulate batch processing time (prepare for actual ZK proof computation)
     tokio::task::spawn_blocking(move || {
         std::thread::sleep(std::time::Duration::from_millis(10));
-    }).await.ok();
-    
+    })
+    .await
+    .ok();
+
     tracing::info!(
-        "Settlement batch processed in {}μs (ready for oracle/ZK integration)", 
+        "Settlement batch processed in {}μs (ready for oracle/ZK integration)",
         start_time.elapsed().as_micros()
     );
 }
@@ -281,21 +294,21 @@ async fn submit_batch_to_solana(
 ) -> Result<solana_sdk::signature::Signature> {
     use solana_sdk::pubkey::Pubkey;
     use std::str::FromStr;
-    
+
     // Convert settlement items to Solana batch format
     let bet_settlements: Vec<BetSettlement> = batch
         .iter()
         .enumerate()
         .map(|(i, item)| {
             // Parse user address (in real implementation, this would be validated)
-            let user = Pubkey::from_str(&item.player_address)
-                .unwrap_or_else(|_| Pubkey::new_unique());
-            
+            let user =
+                Pubkey::from_str(&item.player_address).unwrap_or_else(|_| Pubkey::new_unique());
+
             // Determine outcome and payout logic
             let is_win = item.payout > item.amount.abs() as i64;
             let bet_amount = item.amount.abs() as u64;
             let payout = if is_win { item.payout as u64 } else { 0 };
-            
+
             BetSettlement {
                 bet_id: batch_id * 1000 + i as u64,
                 user,
@@ -306,18 +319,20 @@ async fn submit_batch_to_solana(
             }
         })
         .collect();
-    
+
     let batch_data = BatchSettlementData {
         batch_id,
         sequencer_nonce: batch_id,
         bets: bet_settlements,
     };
-    
+
     // Create placeholder proof for Phase 2
     let proof = vec![0u8; 64]; // 64 bytes of zeros
-    
+
     // Submit to Solana
-    solana_client.submit_settlement_batch(batch_data, proof).await
+    solana_client
+        .submit_settlement_batch(batch_data, proof)
+        .await
 }
 
 pub async fn bet_handler(
@@ -325,7 +340,7 @@ pub async fn bet_handler(
     CustomJson(bet_request): CustomJson<BetRequest>,
 ) -> Result<Json<BetResponse>, StatusCode> {
     let start_time = std::time::Instant::now();
-    
+
     // Validate bet amount (minimum 1000 lamports = 0.000001 SOL)
     if bet_request.amount < 1000 {
         return Err(StatusCode::BAD_REQUEST);
@@ -335,7 +350,8 @@ pub async fn bet_handler(
     let coin_result = tokio::task::spawn_blocking(move || {
         let mut rng = rand::thread_rng();
         rng.gen::<bool>()
-    }).await
+    })
+    .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Generate unique bet ID
@@ -359,12 +375,12 @@ pub async fn bet_handler(
         timestamp: Utc::now(),
     };
 
-        // Background processing: Save bet and update balances (non-blocking)
+    // Background processing: Save bet and update balances (non-blocking)
     let state_clone = state.clone();
     let response_clone = response.clone();
     tokio::spawn(async move {
         let processing_time = start_time.elapsed();
-        
+
         // Create bet record
         let bet = Bet {
             id: bet_id.clone(),
@@ -383,12 +399,20 @@ pub async fn bet_handler(
         }
 
         // Update player balance (background) - prepare for oracle/ZK processing
-        if let Err(e) = state_clone.db.update_player_balance_after_bet(
-            &bet_request.player_address,
-            bet_request.amount as i64,
-            payout as i64,
-        ).await {
-            tracing::error!("Failed to update balance for player {}: {}", bet_request.player_address, e);
+        if let Err(e) = state_clone
+            .db
+            .update_player_balance_after_bet(
+                &bet_request.player_address,
+                bet_request.amount as i64,
+                payout as i64,
+            )
+            .await
+        {
+            tracing::error!(
+                "Failed to update balance for player {}: {}",
+                bet_request.player_address,
+                e
+            );
         }
 
         // Add to settlement queue for ZK proof batching (VF Node pattern)
@@ -399,18 +423,24 @@ pub async fn bet_handler(
             payout: payout as i64,
             timestamp: response_clone.timestamp,
         };
-        
+
         // Update settlement statistics
-        state_clone.settlement_stats.total_items_queued.fetch_add(1, Ordering::Relaxed);
-        state_clone.settlement_stats.items_in_current_batch.fetch_add(1, Ordering::Relaxed);
-        
+        state_clone
+            .settlement_stats
+            .total_items_queued
+            .fetch_add(1, Ordering::Relaxed);
+        state_clone
+            .settlement_stats
+            .items_in_current_batch
+            .fetch_add(1, Ordering::Relaxed);
+
         if let Err(e) = state_clone.settlement_sender.send(settlement_item) {
             tracing::error!("Failed to queue settlement item for bet {}: {}", bet_id, e);
         }
 
         tracing::info!(
-            "Bet {} processed in {}μs (background)", 
-            bet.id, 
+            "Bet {} processed in {}μs (background)",
+            bet.id,
             processing_time.as_micros()
         );
     });
@@ -423,13 +453,14 @@ pub async fn get_balance(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> Result<Json<BalanceResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let balance = state.db.get_player_balance(&address).await
-        .map_err(|e| (
+    let balance = state.db.get_player_balance(&address).await.map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Database error: {}", e),
             }),
-        ))?;
+        )
+    })?;
 
     match balance {
         Some(balance) => Ok(Json(BalanceResponse::from(&balance))),
@@ -455,13 +486,21 @@ pub async fn deposit_handler(
         ));
     }
 
-    let balance = state.db.deposit(&deposit_request.player_address, deposit_request.amount as i64).await
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to deposit: {}", e),
-            }),
-        ))?;
+    let balance = state
+        .db
+        .deposit(
+            &deposit_request.player_address,
+            deposit_request.amount as i64,
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to deposit: {}", e),
+                }),
+            )
+        })?;
 
     Ok(Json(BalanceResponse::from(&balance)))
 }
@@ -479,7 +518,13 @@ pub async fn withdraw_handler(
         ));
     }
 
-    let balance = state.db.withdraw(&withdraw_request.player_address, withdraw_request.amount as i64).await
+    let balance = state
+        .db
+        .withdraw(
+            &withdraw_request.player_address,
+            withdraw_request.amount as i64,
+        )
+        .await
         .map_err(|e| match e {
             DatabaseError::PlayerNotFound(_) => (
                 StatusCode::NOT_FOUND,
@@ -487,10 +532,16 @@ pub async fn withdraw_handler(
                     error: "Player not found".to_string(),
                 }),
             ),
-            DatabaseError::InsufficientBalance { required, available } => (
+            DatabaseError::InsufficientBalance {
+                required,
+                available,
+            } => (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
-                    error: format!("Insufficient balance. Required: {}, Available: {}", required, available),
+                    error: format!(
+                        "Insufficient balance. Required: {}, Available: {}",
+                        required, available
+                    ),
                 }),
             ),
             _ => (
@@ -508,16 +559,21 @@ pub async fn get_player_bets(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> Result<Json<BetsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let bets = state.db.get_player_bets(&address, Some(50)).await
-        .map_err(|e| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Database error: {}", e),
-            }),
-        ))?;
+    let bets = state
+        .db
+        .get_player_bets(&address, Some(50))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Database error: {}", e),
+                }),
+            )
+        })?;
 
     let bet_responses: Vec<BetResponse> = bets.iter().map(BetResponse::from).collect();
-    
+
     Ok(Json(BetsResponse {
         total_count: bet_responses.len(),
         bets: bet_responses,
@@ -527,16 +583,17 @@ pub async fn get_player_bets(
 pub async fn get_recent_bets(
     State(state): State<AppState>,
 ) -> Result<Json<BetsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let bets = state.db.get_recent_bets(Some(50)).await
-        .map_err(|e| (
+    let bets = state.db.get_recent_bets(Some(50)).await.map_err(|e| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Database error: {}", e),
             }),
-        ))?;
+        )
+    })?;
 
     let bet_responses: Vec<BetResponse> = bets.iter().map(BetResponse::from).collect();
-    
+
     Ok(Json(BetsResponse {
         total_count: bet_responses.len(),
         bets: bet_responses,
@@ -556,7 +613,7 @@ pub async fn get_settlement_stats(
     State(state): State<AppState>,
 ) -> Result<Json<SettlementStatsResponse>, StatusCode> {
     let stats = &state.settlement_stats;
-    
+
     let response = SettlementStatsResponse {
         total_items_queued: stats.total_items_queued.load(Ordering::Relaxed),
         total_batches_processed: stats.total_batches_processed.load(Ordering::Relaxed),
@@ -564,7 +621,7 @@ pub async fn get_settlement_stats(
         last_batch_processed_at: *stats.last_batch_processed_at.lock(),
         queue_status: "active".to_string(),
     };
-    
+
     Ok(Json(response))
 }
 
@@ -574,10 +631,12 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Initialize database
-    let db = Database::new(&args.database_url).await
+    let db = Database::new(&args.database_url)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to database: {}", e))?;
-    
-    db.create_tables().await
+
+    db.create_tables()
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to create database tables: {}", e))?;
 
     // Initialize settlement queue for ZK proof batching (VF Node pattern)
@@ -588,32 +647,34 @@ async fn main() -> Result<()> {
     let oracle_config = OracleConfig::default();
     let oracle_manager = OracleManager::new(oracle_config.clone());
     let oracle_client = OracleClient::new(oracle_config);
-    
+
     // Start oracle proof fetching service
-    oracle_manager.start_proof_service().await
+    oracle_manager
+        .start_proof_service()
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to start oracle service: {}", e))?;
 
     // Initialize Solana client (Phase 2: localnet first, then testnet)
     let solana_client = if std::env::var("ENABLE_SOLANA").unwrap_or_default() == "true" {
         info!("Initializing Solana client...");
-        
+
         // Generate or load sequencer keypair (in production, load from secure storage)
         let sequencer_keypair = Keypair::new();
         info!("Sequencer public key: {}", sequencer_keypair.pubkey());
-        
+
         // Configure for local validator by default, switch to testnet with env var
         let solana_config = if std::env::var("SOLANA_TESTNET").unwrap_or_default() == "true" {
             SolanaConfig::testnet()
         } else {
             SolanaConfig::default() // Local validator
         };
-        
+
         // Program IDs (these should match the deployed programs)
         let vault_program_id = std::env::var("VAULT_PROGRAM_ID")
             .unwrap_or_else(|_| "11111111111111111111111111111111".to_string());
         let verifier_program_id = std::env::var("VERIFIER_PROGRAM_ID")
             .unwrap_or_else(|_| "11111111111111111111111111111112".to_string());
-        
+
         match SolanaClient::new(
             solana_config,
             sequencer_keypair,
@@ -624,7 +685,10 @@ async fn main() -> Result<()> {
                 info!("Solana client initialized successfully");
                 // Test connection
                 if let Err(e) = client.health_check().await {
-                    warn!("Solana health check failed: {}. Continuing without Solana integration.", e);
+                    warn!(
+                        "Solana health check failed: {}. Continuing without Solana integration.",
+                        e
+                    );
                     None
                 } else {
                     Some(Arc::new(client))
@@ -655,7 +719,7 @@ async fn main() -> Result<()> {
         let mut settlement_receiver = settlement_receiver;
         let mut batch = Vec::new();
         let mut interval = interval(Duration::from_millis(100)); // 100ms batching window
-        
+
         loop {
             tokio::select! {
                 // Receive settlement items
@@ -663,7 +727,7 @@ async fn main() -> Result<()> {
                     match item {
                         Some(settlement_item) => {
                             batch.push(settlement_item);
-                            
+
                             // Process batch when it reaches size limit (prepare for ZK rollup)
                             if batch.len() >= 50 {
                                 process_settlement_batch(&batch, &stats_clone, solana_client_clone.clone()).await;
@@ -673,7 +737,7 @@ async fn main() -> Result<()> {
                         None => break, // Channel closed
                     }
                 }
-                
+
                 // Process batch on timer (ensure regular processing)
                 _ = interval.tick() => {
                     if !batch.is_empty() {
@@ -689,10 +753,10 @@ async fn main() -> Result<()> {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
     info!("Sequencer listening on {}", addr);
-    
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
-    
+
     Ok(())
 }
 
@@ -705,15 +769,15 @@ mod tests {
     };
     use tower::ServiceExt; // for `oneshot`
 
-    async fn setup_test_app() -> (Router, AppState) {        
+    async fn setup_test_app() -> (Router, AppState) {
         let db = Database::new("").await.unwrap();
         db.create_tables().await.unwrap();
-        
+
         let (settlement_sender, _) = mpsc::unbounded_channel();
         let oracle_config = OracleConfig::default();
         let oracle_client = OracleClient::new(oracle_config);
         let settlement_stats = SettlementStats::new();
-        
+
         let state = AppState {
             db: Arc::new(db),
             settlement_sender,
@@ -721,7 +785,7 @@ mod tests {
             settlement_stats,
             solana_client: None, // No Solana client for tests
         };
-        
+
         let app = create_app(state.clone());
         (app, state)
     }
@@ -731,13 +795,20 @@ mod tests {
         let (app, _state) = setup_test_app().await;
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         assert_eq!(&body[..], b"OK");
     }
 
@@ -768,7 +839,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let balance_response: BalanceResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(balance_response.balance, 10000);
         assert_eq!(balance_response.total_deposited, 10000);
@@ -805,14 +878,16 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let bet_response: BetResponse = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(bet_response.player_address, player_address);
         assert_eq!(bet_response.amount, 5000);
         assert_eq!(bet_response.guess, true);
         assert!(bet_response.bet_id.starts_with("bet_"));
-        
+
         // Check payout logic
         if bet_response.won {
             assert_eq!(bet_response.payout, 10000);
@@ -849,7 +924,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let error_response: ErrorResponse = serde_json::from_slice(&body).unwrap();
         assert!(error_response.error.contains("Player not found"));
     }
@@ -884,7 +961,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let balance_response: BalanceResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(balance_response.balance, 7000);
         assert_eq!(balance_response.total_withdrawn, 3000);
@@ -911,7 +990,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let balance_response: BalanceResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(balance_response.balance, 5000);
         assert_eq!(balance_response.player_address, player_address);
@@ -950,14 +1031,22 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let bets_response: BetsResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(bets_response.total_count, 3);
     }
 
     #[test]
     fn test_args_parsing() {
-        let args = Args::parse_from(&["sequencer", "--port", "8080", "--database-url", "sqlite:test.db"]);
+        let args = Args::parse_from(&[
+            "sequencer",
+            "--port",
+            "8080",
+            "--database-url",
+            "sqlite:test.db",
+        ]);
         assert_eq!(args.port, 8080);
         assert_eq!(args.database_url, "sqlite:test.db");
 

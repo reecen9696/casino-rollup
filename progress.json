@@ -267,8 +267,16 @@
       "status": "completed",
       "started_at": "2025-10-21",
       "completed_at": "2025-10-21",
-      "requirements_alignment": "✓ Aligned with requirements.txt Phase 2",
+      "requirements_alignment": "✓ Fully aligned with requirements.txt Phase 2 - EXCEEDED",
       "target_network": "Solana Testnet Ready",
+      "testing_achievements": {
+        "integration_test_suite": "Complete end-to-end validation with test-solana-complete.sh",
+        "quick_validation": "Fast development testing with test-solana-quick.sh",
+        "status_monitoring": "Real-time system validation with test-status.sh",
+        "process_orchestration": "Multi-process coordination with proper cleanup",
+        "settlement_validation": "Background batch processing verified operational",
+        "api_testing": "Comprehensive endpoint validation including health and bet processing"
+      },
       "tasks": {
         "programs_scaffold": {
           "description": "Anchor verifier program with verify_and_settle (stub: only emits event); Anchor vault program (structs only)",
@@ -301,12 +309,17 @@
             "✓ Background settlement batch processing",
             "✓ Integration with existing settlement queue",
             "✓ Health checks and balance monitoring",
-            "✓ Placeholder proof generation for Phase 2 testing"
+            "✓ Placeholder proof generation for Phase 2 testing",
+            "✓ Complete integration testing suite with multi-process orchestration",
+            "✓ Validated end-to-end workflow: validator → deployment → sequencer → settlement"
           ],
           "files_created": [
             "sequencer/src/solana.rs",
             "Enhanced sequencer/src/main.rs",
-            "test-solana-integration.sh"
+            "test-solana-integration.sh",
+            "test-solana-complete.sh",
+            "test-solana-quick.sh",
+            "test-status.sh"
           ]
         }
       },
@@ -314,7 +327,10 @@
         "✓ localnet tx pipeline ready (sequencer → verifier program)",
         "✓ events ready for testnet visibility",
         "✓ program constraints implemented and tested",
-        "✓ sequencer can submit placeholder transactions"
+        "✓ sequencer can submit placeholder transactions",
+        "✓ complete integration test suite with multi-process orchestration",
+        "✓ settlement batch processing validated operational",
+        "✓ end-to-end workflow tested and documented"
       ]
     },
     "3": {
@@ -323,45 +339,142 @@
       "status": "not_started",
       "requirements_alignment": "🎯 Aligned with requirements.txt Phase 3",
       "target_network": "Solana Testnet",
+      "implementation_strategy": "Break into 6 smaller chunks, each with clear testing and validation",
       "tasks": {
-        "circuit_v0": {
-          "description": "R1CS: for N bets, enforce win/lose boolean, Δbalances per bet, conservation",
+        "3a_zkvm_decision": {
+          "description": "Choose ZK framework: Arkworks vs SP1 zkVM vs alternatives",
           "status": "not_started",
-          "requirements_ref": "accounting-only circuit with reproducible proofs",
-          "implementation_plan": [
-            "Choose Arkworks vs SP1 zkVM approach",
-            "Implement basic batch arithmetic circuit",
-            "Test valid batch → proof verifies off-chain",
-            "Ensure tampered bet → verify fails"
+          "requirements_ref": "R1CS circuit foundation for accounting-only proofs",
+          "acceptance_criteria": [
+            "Framework decision documented with rationale",
+            "Basic proof-of-concept: hello world circuit compiles and generates proof",
+            "Verify proof verification works off-chain",
+            "Performance baseline established (proof time, verification time)",
+            "Solana integration path validated (BN254 compatibility)"
+          ],
+          "estimated_time": "1-2 days",
+          "files_to_create": [
+            "prover/src/circuit.rs",
+            "prover/tests/basic_proof.rs",
+            "docs/zkvm_decision.md"
           ]
         },
-        "groth16_onchain": {
-          "description": "embed VK; BN254 pairing syscall; verify_and_settle checks proof",
+        "3b_accounting_circuit": {
+          "description": "Implement batch accounting circuit: win/lose booleans, balance deltas, conservation",
           "status": "not_started",
-          "requirements_ref": "verify proofs on Solana; compute units < 300k",
-          "implementation_plan": [
-            "Integrate groth16-solana crate or sp1-solana",
-            "Embed verifying key in program",
-            "Test proof verification on testnet",
-            "Measure compute unit usage (<300k target)"
-          ]
+          "requirements_ref": "R1CS: for N bets, enforce win/lose boolean, Δbalances per bet, conservation",
+          "acceptance_criteria": [
+            "Circuit enforces bet outcome is boolean (0 or 1)",
+            "Circuit validates balance deltas: win = +payout, lose = -bet_amount",
+            "Circuit enforces conservation: sum(user_deltas) + house_delta = 0",
+            "Circuit handles multiple bets in single proof (N=1 to N=10 tested)",
+            "Public inputs: initial_balances, final_balances, batch_id",
+            "Private inputs: bet_outcomes, bet_amounts, user_guesses"
+          ],
+          "estimated_time": "3-4 days",
+          "files_to_create": [
+            "prover/src/accounting_circuit.rs",
+            "prover/tests/accounting_tests.rs",
+            "prover/src/witness.rs"
+          ],
+          "depends_on": ["3a_zkvm_decision"]
         },
-        "end_to_end_pipeline": {
-          "description": "sequencer batches every ~3–5s, builds witness, proves, submits ix",
+        "3c_proof_generation": {
+          "description": "Implement witness generation and proof creation from settlement batches",
           "status": "not_started",
-          "requirements_ref": "real batch finalize; crash-safe queue & retries",
-          "implementation_plan": [
-            "Connect settlement queue → ZK proof generation",
-            "Implement witness generation from settlement batches",
-            "Add proof submission to Solana testnet",
-            "Test multiple batches finalize correctly"
-          ]
+          "requirements_ref": "builds witness, proves - reproducible proofs",
+          "acceptance_criteria": [
+            "Witness generation from settlement batch data",
+            "Deterministic proof generation (same input → same proof)",
+            "Proof serialization/deserialization",
+            "Invalid witness detection (negative balances, etc.)",
+            "Batch size limits validated (memory/performance)",
+            "Error handling for malformed settlement data"
+          ],
+          "estimated_time": "2-3 days",
+          "files_to_create": [
+            "prover/src/witness_generator.rs",
+            "prover/src/proof_generator.rs",
+            "prover/tests/witness_tests.rs",
+            "prover/tests/proof_generation_tests.rs"
+          ],
+          "depends_on": ["3b_accounting_circuit"]
+        },
+        "3d_on_chain_verification": {
+          "description": "Embed verifying key in Solana program and implement BN254 proof verification",
+          "status": "not_started",
+          "requirements_ref": "embed VK; BN254 pairing syscall; verify_and_settle checks proof",
+          "acceptance_criteria": [
+            "Verifying key embedded in verifier program",
+            "BN254 pairing syscalls implemented correctly",
+            "Proof verification instruction (verify_and_settle) functional",
+            "Compute unit usage measured and <300k CU target",
+            "Invalid proof rejection tested",
+            "Public input validation (balances match expected format)"
+          ],
+          "estimated_time": "2-3 days",
+          "files_to_create": [
+            "programs/verifier/src/groth16.rs",
+            "programs/verifier/src/verification.rs",
+            "tests/verification_tests.rs"
+          ],
+          "depends_on": ["3c_proof_generation"]
+        },
+        "3e_settlement_integration": {
+          "description": "Connect sequencer settlement queue to proof generation and submission",
+          "status": "not_started",
+          "requirements_ref": "sequencer batches every ~3–5s, builds witness, proves, submits ix",
+          "acceptance_criteria": [
+            "Settlement queue triggers proof generation (every 3-5s or M bets)",
+            "Witness generation from settlement batch",
+            "Proof submission to Solana with proper accounts",
+            "Transaction retry logic for failed submissions",
+            "Crash-safe queue with persistence",
+            "Deduplication prevents double-settlement"
+          ],
+          "estimated_time": "3-4 days",
+          "files_to_create": [
+            "sequencer/src/settlement_prover.rs",
+            "sequencer/src/solana_submitter.rs",
+            "sequencer/tests/settlement_integration_tests.rs"
+          ],
+          "depends_on": ["3d_on_chain_verification"]
+        },
+        "3f_end_to_end_validation": {
+          "description": "Full system testing: multiple batches, DB reconciliation, testnet deployment",
+          "status": "not_started",
+          "requirements_ref": "multiple batches finalize; DB reconciles with on-chain ledger",
+          "acceptance_criteria": [
+            "Multiple consecutive batches process correctly",
+            "Off-chain database reconciles with on-chain state",
+            "Re-submission deduplication works",
+            "Performance targets met (3-5s batch latency)",
+            "Testnet deployment successful",
+            "System recovery after various failure modes",
+            "End-to-end test suite passes"
+          ],
+          "estimated_time": "2-3 days",
+          "files_to_create": [
+            "tests/phase3/test-zk-complete.sh",
+            "tests/phase3/test-zk-performance.sh",
+            "tests/phase3/test-zk-failure-recovery.sh",
+            "docs/phase3_validation_report.md"
+          ],
+          "depends_on": ["3e_settlement_integration"]
         }
       },
       "exit_criteria": [
         "❌ reproducible proofs for accounting arithmetic",
         "❌ L1 verification solid (<300k CU)",
         "❌ end-to-end correctness with testnet settlement"
+      ],
+      "chunk_completion_order": [
+        "3a_zkvm_decision",
+        "3b_accounting_circuit",
+        "3c_proof_generation",
+        "3d_on_chain_verification",
+        "3e_settlement_integration",
+        "3f_end_to_end_validation"
       ]
     },
     "4": {
@@ -510,6 +623,9 @@
     "tests/zkcasino.ts",
     "test-bet-endpoint.sh",
     "test-solana-integration.sh",
+    "test-solana-complete.sh",
+    "test-solana-quick.sh",
+    "test-status.sh",
     ".github/workflows/ci.yml"
   ],
   "last_updated": "2025-10-21T00:00:00Z",
