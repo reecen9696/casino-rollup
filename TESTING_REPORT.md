@@ -28,6 +28,7 @@ Result: 11 passed; 0 failed
 ```
 
 #### 2. Prover Module Tests
+
 ```
 running 41 tests (unit tests)
 ✓ All 41 unit tests passed
@@ -35,7 +36,7 @@ running 41 tests (unit tests)
 running 3 tests (debug_phase3c)
 ✓ All 3 debug tests passed
 
-running 9 tests (integration_phase3c)  
+running 9 tests (integration_phase3c)
 ✓ All 9 integration tests passed
 
 Total: 53 tests passed; 0 failed
