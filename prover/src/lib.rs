@@ -11,5 +11,5 @@ pub use legacy::*;
 
 // Re-export core types for convenience
 pub use ark_bn254::{Bn254, Fr};
-pub use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
 pub use ark_ff::PrimeField;
+pub use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};

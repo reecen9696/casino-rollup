@@ -95,4 +95,7 @@ echo
 echo "🎯 To manually test the endpoint:"
 echo "1. Start sequencer: cargo run --package sequencer"
 echo "2. Test bet: curl -X POST -H 'Content-Type: application/json' -d '{\"player_address\": \"9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM\", \"amount\": 5000, \"guess\": true}' http://localhost:3000/v1/bet"
+
+# Exit with success if we got this far
+exit 0
 echo
