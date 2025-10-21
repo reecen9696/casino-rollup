@@ -1,10 +1,11 @@
 use anyhow::Result;
 use axum::{
-    extract::{State, Path},
+    extract::{State, Path, FromRequest, Request},
     http::StatusCode,
     response::Json,
     routing::{get, post},
     Router,
+    async_trait,
 };
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -12,18 +13,23 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 use tower_http::cors::{CorsLayer, Any};
-use tracing::info;
+use tracing::{info, warn, error};
 use chrono::{DateTime, Utc};
 use rand::Rng;
 use uuid::Uuid;
 use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
+use solana_sdk::signature::Keypair;
+use solana_sdk::signer::Signer;
 
 mod database;
 use database::{Database, Bet, PlayerBalance, DatabaseError};
 
 mod oracle;
 use oracle::{OracleManager, OracleConfig, OracleClient};
+
+mod solana;
+use solana::{SolanaClient, SolanaConfig, BatchSettlementData, BetSettlement};
 
 // Settlement queue for ZK proof batching (VF Node pattern)
 #[derive(Debug, Clone)]
@@ -84,6 +90,7 @@ pub struct AppState {
     pub settlement_sender: SettlementSender,
     pub oracle_client: OracleClient,
     pub settlement_stats: SettlementStats,
+    pub solana_client: Option<Arc<SolanaClient>>, // Optional for Phase 2 testing
 }
 
 #[derive(Deserialize, Serialize)]
@@ -138,6 +145,25 @@ pub struct BetsResponse {
 #[derive(Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
+}
+
+// Custom JSON extractor that returns 400 instead of 422 for JSON errors
+pub struct CustomJson<T>(pub T);
+
+#[async_trait]
+impl<T, S> FromRequest<S> for CustomJson<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = StatusCode;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(value)) => Ok(CustomJson(value)),
+            Err(_) => Err(StatusCode::BAD_REQUEST), // Return 400 instead of 422
+        }
+    }
 }
 
 impl From<&PlayerBalance> for BalanceResponse {
@@ -195,7 +221,11 @@ pub async fn health_check() -> &'static str {
 }
 
 // Settlement batch processor for ZK proof preparation (VF Node pattern)
-async fn process_settlement_batch(batch: &[SettlementItem], stats: &SettlementStats) {
+async fn process_settlement_batch(
+    batch: &[SettlementItem], 
+    stats: &SettlementStats,
+    solana_client: Option<Arc<SolanaClient>>,
+) {
     let start_time = std::time::Instant::now();
     
     tracing::info!(
@@ -204,9 +234,21 @@ async fn process_settlement_batch(batch: &[SettlementItem], stats: &SettlementSt
     );
     
     // Update statistics
-    stats.total_batches_processed.fetch_add(1, Ordering::Relaxed);
+    let batch_id = stats.total_batches_processed.fetch_add(1, Ordering::Relaxed) + 1;
     stats.items_in_current_batch.fetch_sub(batch.len() as u64, Ordering::Relaxed);
     *stats.last_batch_processed_at.lock() = Some(Utc::now());
+    
+    // Submit to Solana if client is available (Phase 2 integration)
+    if let Some(solana_client) = solana_client {
+        match submit_batch_to_solana(&*solana_client, batch_id, batch).await {
+            Ok(signature) => {
+                info!("Batch {} submitted to Solana successfully: {}", batch_id, signature);
+            }
+            Err(e) => {
+                error!("Failed to submit batch {} to Solana: {}. Continuing with local processing.", batch_id, e);
+            }
+        }
+    }
     
     // TODO: Future ZK proof generation and oracle verification
     // For now, log the batch processing for oracle integration readiness
@@ -231,9 +273,56 @@ async fn process_settlement_batch(batch: &[SettlementItem], stats: &SettlementSt
     );
 }
 
+/// Submit settlement batch to Solana (Phase 2 implementation)
+async fn submit_batch_to_solana(
+    solana_client: &SolanaClient,
+    batch_id: u64,
+    batch: &[SettlementItem],
+) -> Result<solana_sdk::signature::Signature> {
+    use solana_sdk::pubkey::Pubkey;
+    use std::str::FromStr;
+    
+    // Convert settlement items to Solana batch format
+    let bet_settlements: Vec<BetSettlement> = batch
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            // Parse user address (in real implementation, this would be validated)
+            let user = Pubkey::from_str(&item.player_address)
+                .unwrap_or_else(|_| Pubkey::new_unique());
+            
+            // Determine outcome and payout logic
+            let is_win = item.payout > item.amount.abs() as i64;
+            let bet_amount = item.amount.abs() as u64;
+            let payout = if is_win { item.payout as u64 } else { 0 };
+            
+            BetSettlement {
+                bet_id: batch_id * 1000 + i as u64,
+                user,
+                bet_amount,
+                user_guess: if is_win { 1 } else { 0 }, // Simplified for Phase 2
+                outcome: if is_win { 1 } else { 0 },
+                payout,
+            }
+        })
+        .collect();
+    
+    let batch_data = BatchSettlementData {
+        batch_id,
+        sequencer_nonce: batch_id,
+        bets: bet_settlements,
+    };
+    
+    // Create placeholder proof for Phase 2
+    let proof = vec![0u8; 64]; // 64 bytes of zeros
+    
+    // Submit to Solana
+    solana_client.submit_settlement_batch(batch_data, proof).await
+}
+
 pub async fn bet_handler(
     State(state): State<AppState>,
-    Json(bet_request): Json<BetRequest>,
+    CustomJson(bet_request): CustomJson<BetRequest>,
 ) -> Result<Json<BetResponse>, StatusCode> {
     let start_time = std::time::Instant::now();
     
@@ -355,7 +444,7 @@ pub async fn get_balance(
 
 pub async fn deposit_handler(
     State(state): State<AppState>,
-    Json(deposit_request): Json<DepositRequest>,
+    CustomJson(deposit_request): CustomJson<DepositRequest>,
 ) -> Result<Json<BalanceResponse>, (StatusCode, Json<ErrorResponse>)> {
     if deposit_request.amount == 0 {
         return Err((
@@ -379,7 +468,7 @@ pub async fn deposit_handler(
 
 pub async fn withdraw_handler(
     State(state): State<AppState>,
-    Json(withdraw_request): Json<WithdrawRequest>,
+    CustomJson(withdraw_request): CustomJson<WithdrawRequest>,
 ) -> Result<Json<BalanceResponse>, (StatusCode, Json<ErrorResponse>)> {
     if withdraw_request.amount == 0 {
         return Err((
@@ -504,16 +593,65 @@ async fn main() -> Result<()> {
     oracle_manager.start_proof_service().await
         .map_err(|e| anyhow::anyhow!("Failed to start oracle service: {}", e))?;
 
+    // Initialize Solana client (Phase 2: localnet first, then testnet)
+    let solana_client = if std::env::var("ENABLE_SOLANA").unwrap_or_default() == "true" {
+        info!("Initializing Solana client...");
+        
+        // Generate or load sequencer keypair (in production, load from secure storage)
+        let sequencer_keypair = Keypair::new();
+        info!("Sequencer public key: {}", sequencer_keypair.pubkey());
+        
+        // Configure for local validator by default, switch to testnet with env var
+        let solana_config = if std::env::var("SOLANA_TESTNET").unwrap_or_default() == "true" {
+            SolanaConfig::testnet()
+        } else {
+            SolanaConfig::default() // Local validator
+        };
+        
+        // Program IDs (these should match the deployed programs)
+        let vault_program_id = std::env::var("VAULT_PROGRAM_ID")
+            .unwrap_or_else(|_| "11111111111111111111111111111111".to_string());
+        let verifier_program_id = std::env::var("VERIFIER_PROGRAM_ID")
+            .unwrap_or_else(|_| "11111111111111111111111111111112".to_string());
+        
+        match SolanaClient::new(
+            solana_config,
+            sequencer_keypair,
+            &vault_program_id,
+            &verifier_program_id,
+        ) {
+            Ok(client) => {
+                info!("Solana client initialized successfully");
+                // Test connection
+                if let Err(e) = client.health_check().await {
+                    warn!("Solana health check failed: {}. Continuing without Solana integration.", e);
+                    None
+                } else {
+                    Some(Arc::new(client))
+                }
+            }
+            Err(e) => {
+                warn!("Failed to initialize Solana client: {}. Continuing without Solana integration.", e);
+                None
+            }
+        }
+    } else {
+        info!("Solana integration disabled. Set ENABLE_SOLANA=true to enable.");
+        None
+    };
+
     let state = AppState {
         db: Arc::new(db),
         settlement_sender,
         oracle_client,
         settlement_stats: settlement_stats.clone(),
+        solana_client,
     };
 
     // Settlement processor for ZK proof batching (VF Node background pattern)
     let stats_clone = settlement_stats.clone();
-    let settlement_processor_handle = tokio::spawn(async move {
+    let solana_client_clone = state.solana_client.clone();
+    let _settlement_processor_handle = tokio::spawn(async move {
         let mut settlement_receiver = settlement_receiver;
         let mut batch = Vec::new();
         let mut interval = interval(Duration::from_millis(100)); // 100ms batching window
@@ -528,7 +666,7 @@ async fn main() -> Result<()> {
                             
                             // Process batch when it reaches size limit (prepare for ZK rollup)
                             if batch.len() >= 50 {
-                                process_settlement_batch(&batch, &stats_clone).await;
+                                process_settlement_batch(&batch, &stats_clone, solana_client_clone.clone()).await;
                                 batch.clear();
                             }
                         }
@@ -539,7 +677,7 @@ async fn main() -> Result<()> {
                 // Process batch on timer (ensure regular processing)
                 _ = interval.tick() => {
                     if !batch.is_empty() {
-                        process_settlement_batch(&batch, &stats_clone).await;
+                        process_settlement_batch(&batch, &stats_clone, solana_client_clone.clone()).await;
                         batch.clear();
                     }
                 }
@@ -571,8 +709,17 @@ mod tests {
         let db = Database::new("").await.unwrap();
         db.create_tables().await.unwrap();
         
+        let (settlement_sender, _) = mpsc::unbounded_channel();
+        let oracle_config = OracleConfig::default();
+        let oracle_client = OracleClient::new(oracle_config);
+        let settlement_stats = SettlementStats::new();
+        
         let state = AppState {
             db: Arc::new(db),
+            settlement_sender,
+            oracle_client,
+            settlement_stats,
+            solana_client: None, // No Solana client for tests
         };
         
         let app = create_app(state.clone());

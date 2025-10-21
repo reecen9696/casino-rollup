@@ -13,6 +13,11 @@ tower-http = { workspace = true, features = ["cors"] }
 # HTTP client for oracle integration
 reqwest = { version = "0.11", features = ["json"] }
 
+# Solana dependencies
+solana-client = "1.18"
+solana-sdk = "1.18"
+solana-transaction-status = "1.18"
+
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
@@ -35,6 +40,7 @@ anyhow.workspace = true
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+log = "0.4"
 
 [dev-dependencies]
 tokio-test.workspace = true
