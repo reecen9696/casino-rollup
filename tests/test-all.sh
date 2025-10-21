@@ -26,7 +26,7 @@ RUN_STATIC=true
 RUN_PHASE0=true
 RUN_PHASE1=true
 RUN_PHASE2=true
-RUN_PHASE3=false
+RUN_PHASE3=true
 
 # Parse command line arguments
 case "${1:-}" in
@@ -61,6 +61,7 @@ case "${1:-}" in
         RUN_PHASE0=false
         RUN_PHASE1=false
         RUN_PHASE2=false
+        RUN_PHASE3=true
         ;;
     --static)
         RUN_PHASE0=false
@@ -249,14 +250,14 @@ fi
 # ================================================================================
 
 if [ "$RUN_PHASE3" = true ]; then
-    print_header "Phase 3: ZK Circuits (Minimal Accounting)"
+    print_header "Phase 3: ZK Circuits (Proof Generation Complete)"
     
-    echo -e "${YELLOW}⚠ Phase 3 tests not yet implemented${NC}"
-    echo -e "${BLUE}Phase 3 will include:${NC}"
-    echo -e "  • ZK circuit compilation and testing"
-    echo -e "  • Groth16 proof generation and verification"
-    echo -e "  • On-chain proof verification (<300k CU)"
-    echo -e "  • End-to-end ZK rollup pipeline"
+    echo -e "${YELLOW}Running: Phase 3c ZK Circuits Integration${NC}"
+    if "$SCRIPT_DIR/phase3/test-phase3c.sh"; then
+        print_test_result "Phase 3c ZK Circuits Integration" "PASS"
+    else
+        print_test_result "Phase 3c ZK Circuits Integration" "FAIL"
+    fi
 fi
 
 # ================================================================================
