@@ -1,0 +1,27 @@
+{
+  "batches": {
+    "1": {
+      "batch_id": 1,
+      "status": "Confirmed",
+      "created_at": "2025-10-22T00:16:14.003574Z",
+      "updated_at": "2025-10-22T00:16:16.043081Z",
+      "proof_data": null,
+      "transaction_signature": null,
+      "retry_count": 0,
+      "error_message": null,
+      "items": [
+        {
+          "bet_id": "bet_33f39825c2d744529ae620076082b14e",
+          "player_address": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+          "amount": 5000,
+          "payout": 10000,
+          "timestamp": "2025-10-22T00:16:13.992241Z"
+        }
+      ]
+    }
+  },
+  "processed_bet_ids": [
+    "bet_33f39825c2d744529ae620076082b14e"
+  ],
+  "last_batch_id": 1
+}

@@ -22,6 +22,9 @@ solana-transaction-status = "1.18"
 serde.workspace = true
 serde_json.workspace = true
 
+# ZK Proof generation
+prover = { path = "../prover" }
+
 # Random number generation
 rand = "0.8"
 

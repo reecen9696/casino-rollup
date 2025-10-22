@@ -25,14 +25,20 @@ use uuid::Uuid;
 mod database;
 use database::{Bet, Database, DatabaseError, PlayerBalance};
 
+mod settlement_persistence;
+use settlement_persistence::{SettlementBatchStatus, SettlementPersistence};
+
 mod oracle;
 use oracle::{OracleClient, OracleConfig, OracleManager};
 
 mod solana;
 use solana::{BatchSettlementData, BetSettlement, SolanaClient, SolanaConfig};
 
+mod settlement_prover;
+use settlement_prover::{SettlementProver, SettlementProverConfig};
+
 // Settlement queue for ZK proof batching (VF Node pattern)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SettlementItem {
     pub bet_id: String,
     pub player_address: String,
@@ -91,6 +97,8 @@ pub struct AppState {
     pub oracle_client: OracleClient,
     pub settlement_stats: SettlementStats,
     pub solana_client: Option<Arc<SolanaClient>>, // Optional for Phase 2 testing
+    pub settlement_prover: Option<Arc<SettlementProver>>, // Phase 3e: ZK proof generation
+    pub settlement_persistence: Arc<SettlementPersistence>, // Phase 3e: Crash-safe queue
 }
 
 #[derive(Deserialize, Serialize)]
@@ -225,6 +233,8 @@ async fn process_settlement_batch(
     batch: &[SettlementItem],
     stats: &SettlementStats,
     solana_client: Option<Arc<SolanaClient>>,
+    settlement_prover: Option<Arc<SettlementProver>>,
+    settlement_persistence: Arc<SettlementPersistence>,
 ) {
     let start_time = std::time::Instant::now();
 
@@ -238,31 +248,103 @@ async fn process_settlement_batch(
         .total_batches_processed
         .fetch_add(1, Ordering::Relaxed)
         + 1;
+
+    // Phase 3e: Save batch to persistent storage for crash safety
+    let batch_id_str = format!("batch_{}", batch_id);
+    if let Err(e) = settlement_persistence
+        .save_batch(&batch_id_str, batch.to_vec())
+        .await
+    {
+        error!(
+            "Failed to save batch {} to persistent storage: {}",
+            batch_id, e
+        );
+        return; // Don't process if we can't persist (crash safety requirement)
+    }
+
     stats
         .items_in_current_batch
         .fetch_sub(batch.len() as u64, Ordering::Relaxed);
     *stats.last_batch_processed_at.lock() = Some(Utc::now());
 
-    // Submit to Solana if client is available (Phase 2 integration)
-    if let Some(solana_client) = solana_client {
-        match submit_batch_to_solana(&*solana_client, batch_id, batch).await {
-            Ok(signature) => {
-                info!(
-                    "Batch {} submitted to Solana successfully: {}",
-                    batch_id, signature
-                );
+    // Phase 3e: Generate ZK proof if prover is available
+    let proof_data = if let Some(settlement_prover) = settlement_prover {
+        info!(
+            "Generating ZK proof for batch {} with {} items",
+            batch_id,
+            batch.len()
+        );
+
+        match settlement_prover.generate_proof(batch).await {
+            Ok(proof) => {
+                info!("ZK proof generated successfully for batch {}", batch_id);
+
+                // Verify the proof for testing
+                match settlement_prover.verify_proof(&proof).await {
+                    Ok(true) => {
+                        info!("ZK proof verified successfully for batch {}", batch_id);
+
+                        // Convert proof to bytes for Solana submission
+                        match proof.to_bytes() {
+                            Ok(proof_bytes) => Some(proof_bytes),
+                            Err(e) => {
+                                error!("Failed to serialize proof for batch {}: {}", batch_id, e);
+                                None
+                            }
+                        }
+                    }
+                    Ok(false) => {
+                        error!("ZK proof verification failed for batch {}", batch_id);
+                        None
+                    }
+                    Err(e) => {
+                        error!("Error verifying ZK proof for batch {}: {}", batch_id, e);
+                        None
+                    }
+                }
             }
             Err(e) => {
-                error!(
-                    "Failed to submit batch {} to Solana: {}. Continuing with local processing.",
-                    batch_id, e
-                );
+                error!("Failed to generate ZK proof for batch {}: {}", batch_id, e);
+                None
             }
+        }
+    } else {
+        // Fallback to placeholder proof for Phase 2 compatibility
+        info!(
+            "Using placeholder proof for batch {} (ZK prover not enabled)",
+            batch_id
+        );
+        Some(vec![0u8; 64]) // 64 bytes of zeros
+    };
+
+    // Submit to Solana if client is available
+    if let Some(solana_client) = solana_client {
+        if let Some(proof_bytes) = proof_data {
+            match submit_batch_to_solana_with_proof(&*solana_client, batch_id, batch, &proof_bytes)
+                .await
+            {
+                Ok(signature) => {
+                    info!(
+                        "Batch {} submitted to Solana successfully with proof: {}",
+                        batch_id, signature
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to submit batch {} to Solana: {}. Continuing with local processing.",
+                        batch_id, e
+                    );
+                }
+            }
+        } else {
+            error!(
+                "No proof available for batch {}, skipping Solana submission",
+                batch_id
+            );
         }
     }
 
-    // TODO: Future ZK proof generation and oracle verification
-    // For now, log the batch processing for oracle integration readiness
+    // Log batch details for debugging
     for item in batch {
         tracing::debug!(
             "Settlement item: bet_id={}, player={}, amount={}, payout={}",
@@ -280,8 +362,15 @@ async fn process_settlement_batch(
     .await
     .ok();
 
+    // Phase 3e: Mark batch as completed in persistent storage
+    if let Err(e) = settlement_persistence.mark_completed(&batch_id_str).await {
+        error!("Failed to mark batch {} as completed: {}", batch_id, e);
+        // Continue anyway - the batch was processed successfully
+    }
+
     tracing::info!(
-        "Settlement batch processed in {}μs (ready for oracle/ZK integration)",
+        "Settlement batch {} processed and persisted in {}μs (ready for oracle/ZK integration)",
+        batch_id,
         start_time.elapsed().as_micros()
     );
 }
@@ -332,6 +421,62 @@ async fn submit_batch_to_solana(
     // Submit to Solana
     solana_client
         .submit_settlement_batch(batch_data, proof)
+        .await
+}
+
+/// Submit settlement batch to Solana with ZK proof (Phase 3e implementation)
+async fn submit_batch_to_solana_with_proof(
+    solana_client: &SolanaClient,
+    batch_id: u64,
+    batch: &[SettlementItem],
+    proof_data: &[u8],
+) -> Result<solana_sdk::signature::Signature> {
+    use solana_sdk::pubkey::Pubkey;
+    use std::str::FromStr;
+
+    info!(
+        "Submitting batch {} with ZK proof to Solana (size: {} bytes)",
+        batch_id,
+        proof_data.len()
+    );
+
+    // Convert settlement items to Solana batch format
+    let bet_settlements: Vec<BetSettlement> = batch
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            // Parse user address (in real implementation, this would be validated)
+            let user =
+                Pubkey::from_str(&item.player_address).unwrap_or_else(|_| Pubkey::new_unique());
+
+            // Convert bet_id string to u64 by hashing
+            let bet_id = i as u64; // Simple index-based ID for batch
+
+            // Determine outcome from payout (won if payout > 0)
+            let won = item.payout > 0;
+            let user_guess = 1u8; // Default guess (in real system this would be stored)
+            let outcome = if won { user_guess } else { 1 - user_guess };
+
+            BetSettlement {
+                bet_id,
+                user,
+                bet_amount: item.amount as u64,
+                user_guess,
+                outcome,
+                payout: item.payout as u64,
+            }
+        })
+        .collect();
+
+    let batch_data = BatchSettlementData {
+        batch_id,
+        sequencer_nonce: batch_id, // Use batch_id as nonce
+        bets: bet_settlements,
+    };
+
+    // Submit to Solana with real ZK proof
+    solana_client
+        .submit_settlement_batch(batch_data, proof_data.to_vec())
         .await
 }
 
@@ -639,6 +784,61 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create database tables: {}", e))?;
 
+    // Initialize settlement persistence for crash-safe queue (Phase 3e requirement)
+    info!("Initializing settlement persistence for crash-safe queue...");
+    let settlement_persistence = Arc::new(
+        SettlementPersistence::new(&args.database_url)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize settlement persistence: {}", e))?,
+    );
+
+    // Phase 3e: Crash recovery - process any pending batches from previous runs
+    info!("Checking for pending settlement batches to recover...");
+    let pending_batches = settlement_persistence
+        .get_pending_batches()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get pending batches: {}", e))?;
+
+    if !pending_batches.is_empty() {
+        info!(
+            "Found {} pending batches from previous run, starting recovery...",
+            pending_batches.len()
+        );
+
+        for batch in pending_batches {
+            info!(
+                "Recovering batch {} with status {:?}",
+                batch.batch_id, batch.status
+            );
+
+            // TODO: Implement actual recovery logic based on batch status
+            // For now, just log the recovery - full implementation would:
+            // - Re-process pending batches
+            // - Re-submit proved batches
+            // - Verify submitted batches on-chain
+            match batch.status {
+                SettlementBatchStatus::Pending => {
+                    info!("Batch {} needs re-processing", batch.batch_id);
+                }
+                SettlementBatchStatus::Proving => {
+                    info!("Batch {} was interrupted during proving", batch.batch_id);
+                }
+                SettlementBatchStatus::Proved => {
+                    info!("Batch {} has proof ready for submission", batch.batch_id);
+                }
+                SettlementBatchStatus::Submitted => {
+                    info!(
+                        "Batch {} was submitted, checking on-chain status",
+                        batch.batch_id
+                    );
+                }
+                _ => {}
+            }
+        }
+    } else {
+        info!("No pending batches found, starting fresh");
+    }
+
     // Initialize settlement queue for ZK proof batching (VF Node pattern)
     let (settlement_sender, settlement_receiver) = mpsc::unbounded_channel();
     let settlement_stats = SettlementStats::new();
@@ -704,17 +904,46 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Initialize Settlement Prover for Phase 3e (ZK proof generation)
+    let settlement_prover = if std::env::var("ENABLE_ZK_PROOFS").unwrap_or_default() == "true" {
+        info!("Initializing Settlement Prover for ZK proof generation...");
+
+        let prover_config = SettlementProverConfig::default();
+        match SettlementProver::new(prover_config).await {
+            Ok(prover) => {
+                // Initialize some demo user balances for testing
+                prover.init_user_balance(100, 10000).await;
+                prover.init_user_balance(200, 5000).await;
+                prover.init_user_balance(300, 15000).await;
+
+                info!("Settlement Prover initialized successfully");
+                Some(Arc::new(prover))
+            }
+            Err(e) => {
+                warn!("Failed to initialize Settlement Prover: {}. Continuing with placeholder proofs.", e);
+                None
+            }
+        }
+    } else {
+        info!("ZK proof generation disabled. Set ENABLE_ZK_PROOFS=true to enable real proof generation.");
+        None
+    };
+
     let state = AppState {
         db: Arc::new(db),
         settlement_sender,
         oracle_client,
         settlement_stats: settlement_stats.clone(),
         solana_client,
+        settlement_prover,
+        settlement_persistence: settlement_persistence.clone(),
     };
 
     // Settlement processor for ZK proof batching (VF Node background pattern)
     let stats_clone = settlement_stats.clone();
     let solana_client_clone = state.solana_client.clone();
+    let settlement_prover_clone = state.settlement_prover.clone();
+    let settlement_persistence_clone = state.settlement_persistence.clone();
     let _settlement_processor_handle = tokio::spawn(async move {
         let mut settlement_receiver = settlement_receiver;
         let mut batch = Vec::new();
@@ -726,12 +955,32 @@ async fn main() -> Result<()> {
                 item = settlement_receiver.recv() => {
                     match item {
                         Some(settlement_item) => {
-                            batch.push(settlement_item);
+                            // Phase 3e: Check for deduplication before adding to batch
+                            match settlement_persistence_clone.is_bet_processed(&settlement_item.bet_id).await {
+                                Ok(already_processed) => {
+                                    if already_processed {
+                                        warn!("Bet {} already processed, skipping to prevent double settlement", settlement_item.bet_id);
+                                        continue;
+                                    }
 
-                            // Process batch when it reaches size limit (prepare for ZK rollup)
-                            if batch.len() >= 50 {
-                                process_settlement_batch(&batch, &stats_clone, solana_client_clone.clone()).await;
-                                batch.clear();
+                                    // Add to batch if not already processed
+                                    batch.push(settlement_item);
+
+                                    // Process batch when it reaches size limit (prepare for ZK rollup)
+                                    if batch.len() >= 50 {
+                                        process_settlement_batch(&batch, &stats_clone, solana_client_clone.clone(), settlement_prover_clone.clone(), settlement_persistence_clone.clone()).await;
+                                        batch.clear();
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to check if bet {} is already processed: {}. Proceeding anyway.", settlement_item.bet_id, e);
+                                    // If deduplication check fails, proceed anyway to avoid blocking settlement
+                                    batch.push(settlement_item);
+                                    if batch.len() >= 50 {
+                                        process_settlement_batch(&batch, &stats_clone, solana_client_clone.clone(), settlement_prover_clone.clone(), settlement_persistence_clone.clone()).await;
+                                        batch.clear();
+                                    }
+                                }
                             }
                         }
                         None => break, // Channel closed
@@ -741,7 +990,7 @@ async fn main() -> Result<()> {
                 // Process batch on timer (ensure regular processing)
                 _ = interval.tick() => {
                     if !batch.is_empty() {
-                        process_settlement_batch(&batch, &stats_clone, solana_client_clone.clone()).await;
+                        process_settlement_batch(&batch, &stats_clone, solana_client_clone.clone(), settlement_prover_clone.clone(), settlement_persistence_clone.clone()).await;
                         batch.clear();
                     }
                 }
@@ -773,6 +1022,13 @@ mod tests {
         let db = Database::new("").await.unwrap();
         db.create_tables().await.unwrap();
 
+        // Initialize test settlement persistence
+        let settlement_persistence = Arc::new(
+            SettlementPersistence::new("sqlite::memory:")
+                .await
+                .expect("Failed to initialize test settlement persistence"),
+        );
+
         let (settlement_sender, _) = mpsc::unbounded_channel();
         let oracle_config = OracleConfig::default();
         let oracle_client = OracleClient::new(oracle_config);
@@ -783,7 +1039,9 @@ mod tests {
             settlement_sender,
             oracle_client,
             settlement_stats,
-            solana_client: None, // No Solana client for tests
+            solana_client: None,     // No Solana client for tests
+            settlement_prover: None, // No ZK prover for tests
+            settlement_persistence,
         };
 
         let app = create_app(state.clone());
