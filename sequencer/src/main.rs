@@ -31,6 +31,9 @@ use settlement_persistence::{SettlementBatchStatus, SettlementPersistence};
 mod oracle;
 use oracle::{OracleClient, OracleConfig, OracleManager};
 
+mod vrf;
+use vrf::VRFKeypair;
+
 mod solana;
 use solana::{BatchSettlementData, BetSettlement, SolanaClient, SolanaConfig};
 
@@ -88,6 +91,12 @@ pub struct Args {
 
     #[arg(short, long, default_value = "sqlite:zkcasino.db")]
     pub database_url: String,
+
+    #[arg(long, default_value = "vrf-keypair.json")]
+    pub vrf_keypair_path: String,
+
+    #[arg(long)]
+    pub enable_vrf: bool,
 }
 
 #[derive(Clone)]
@@ -99,6 +108,7 @@ pub struct AppState {
     pub solana_client: Option<Arc<SolanaClient>>, // Optional for Phase 2 testing
     pub settlement_prover: Option<Arc<SettlementProver>>, // Phase 3e: ZK proof generation
     pub settlement_persistence: Arc<SettlementPersistence>, // Phase 3e: Crash-safe queue
+    pub vrf_keypair: Option<Arc<VRFKeypair>>, // Phase 4a: VRF keypair for verifiable randomness
 }
 
 #[derive(Deserialize, Serialize)]
@@ -859,6 +869,25 @@ async fn main() -> Result<()> {
         info!("No pending batches found, starting fresh");
     }
 
+    // Phase 4a: Initialize VRF keypair for verifiable randomness
+    let vrf_keypair = if args.enable_vrf {
+        info!("Initializing VRF keypair for verifiable randomness...");
+        match VRFKeypair::load_or_generate("VRF_KEYPAIR_PATH", &args.vrf_keypair_path) {
+            Ok(keypair) => {
+                info!("VRF keypair loaded successfully. Public key: {:?}", 
+                      hex::encode(keypair.public_key_bytes()));
+                Some(Arc::new(keypair))
+            }
+            Err(e) => {
+                error!("Failed to initialize VRF keypair: {}", e);
+                return Err(anyhow::anyhow!("VRF keypair initialization failed: {}", e));
+            }
+        }
+    } else {
+        info!("VRF disabled, using CSPRNG for randomness");
+        None
+    };
+
     // Initialize settlement queue for ZK proof batching (VF Node pattern)
     let (settlement_sender, settlement_receiver) = mpsc::unbounded_channel();
     let settlement_stats = SettlementStats::new();
@@ -957,6 +986,7 @@ async fn main() -> Result<()> {
         solana_client,
         settlement_prover,
         settlement_persistence: settlement_persistence.clone(),
+        vrf_keypair,
     };
 
     // Settlement processor for ZK proof batching (VF Node background pattern)
@@ -1062,6 +1092,7 @@ mod tests {
             solana_client: None,     // No Solana client for tests
             settlement_prover: None, // No ZK prover for tests
             settlement_persistence,
+            vrf_keypair: None,       // No VRF keypair for tests
         };
 
         let app = create_app(state.clone());
