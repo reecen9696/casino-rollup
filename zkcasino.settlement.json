@@ -3,45 +3,25 @@
     "1": {
       "batch_id": 1,
       "status": "Confirmed",
-      "created_at": "2025-10-22T03:17:21.018391Z",
-      "updated_at": "2025-10-22T03:17:21.031436Z",
+      "created_at": "2025-10-22T03:34:37.565708Z",
+      "updated_at": "2025-10-22T03:34:39.588782Z",
       "proof_data": null,
-      "transaction_signature": "mock_tx_1_confirmed",
+      "transaction_signature": null,
       "retry_count": 0,
       "error_message": null,
       "items": [
         {
-          "bet_id": "bet_8a9d3c96dae04fbeb62b851222e218e7",
+          "bet_id": "bet_aa39082597b342788796855a80fc90b7",
           "player_address": "11111111111111111111111111111112",
-          "amount": 10000,
-          "payout": 0,
-          "timestamp": "2025-10-22T03:17:20.956677Z"
-        }
-      ]
-    },
-    "2": {
-      "batch_id": 2,
-      "status": "Confirmed",
-      "created_at": "2025-10-22T03:19:01.716949Z",
-      "updated_at": "2025-10-22T03:19:01.729366Z",
-      "proof_data": null,
-      "transaction_signature": "mock_tx_2_confirmed",
-      "retry_count": 0,
-      "error_message": null,
-      "items": [
-        {
-          "bet_id": "bet_6533f54e59714da699a50e8cd0c51575",
-          "player_address": "11111111111111111111111111111112",
-          "amount": 10000,
-          "payout": 20000,
-          "timestamp": "2025-10-22T03:19:01.628721Z"
+          "amount": 5000,
+          "payout": 10000,
+          "timestamp": "2025-10-22T03:34:37.470125Z"
         }
       ]
     }
   },
   "processed_bet_ids": [
-    "bet_6533f54e59714da699a50e8cd0c51575",
-    "bet_8a9d3c96dae04fbeb62b851222e218e7"
+    "bet_aa39082597b342788796855a80fc90b7"
   ],
-  "last_batch_id": 2
+  "last_batch_id": 1
 }
