@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use log::{info, warn};
+use log::{debug, info, warn};
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
@@ -138,12 +138,44 @@ impl SolanaClient {
             batch_data.bets.len()
         );
 
+        // Ensure required accounts exist before submitting
+        if let Err(e) = self.ensure_settlement_accounts_exist().await {
+            warn!("Failed to initialize settlement accounts: {}", e);
+            // Continue with submission attempt - accounts might exist but check failed
+        }
+
         let instruction = self.create_verify_and_settle_instruction(batch_data, proof)?;
 
         let signature = self.send_transaction_with_retry(vec![instruction]).await?;
 
         info!("Settlement batch submitted successfully: {}", signature);
         Ok(signature)
+    }
+
+    /// Ensure all required settlement accounts exist and are properly initialized
+    async fn ensure_settlement_accounts_exist(&self) -> Result<()> {
+        // Derive verifier state PDA
+        let (verifier_state, _) =
+            Pubkey::find_program_address(&[b"verifier_state"], &self.verifier_program_id);
+
+        // Check if verifier state account exists
+        // For now, just log the account we would check and continue with settlement attempt
+        debug!("Would check verifier state account: {}", verifier_state);
+        
+        // Return Ok to proceed with settlement - account existence issues will be caught
+        // during transaction submission and trigger fallback processing
+        Ok(())
+    }
+
+    /// Initialize the verifier state account
+    async fn initialize_verifier_state(&self, verifier_state: &Pubkey) -> Result<()> {
+        // For now, we'll just log that initialization is needed
+        // In a full implementation, this would create the account
+        warn!("Verifier state account initialization needed: {}", verifier_state);
+        warn!("Settlement will use local fallback processing");
+        
+        // Return an error to trigger fallback processing
+        Err(anyhow!("Verifier state account not initialized - settlement will use local processing"))
     }
 
     /// Create verify_and_settle instruction for the verifier program

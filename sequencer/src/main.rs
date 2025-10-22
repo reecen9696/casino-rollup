@@ -109,6 +109,7 @@ pub struct AppState {
     pub settlement_prover: Option<Arc<SettlementProver>>, // Phase 3e: ZK proof generation
     pub settlement_persistence: Arc<SettlementPersistence>, // Phase 3e: Crash-safe queue
     pub vrf_keypair: Option<Arc<VRFKeypair>>, // Phase 4a: VRF keypair for verifiable randomness
+    pub bet_counter: Arc<AtomicU64>, // Unique counter for VRF nonces
 }
 
 #[derive(Deserialize, Serialize)]
@@ -516,16 +517,20 @@ pub async fn bet_handler(
 ) -> Result<Json<BetResponse>, StatusCode> {
     let start_time = std::time::Instant::now();
 
+    tracing::debug!("Bet request received: player={}, amount={}, guess={}", 
+                   bet_request.player_address, bet_request.amount, bet_request.guess);
+
     // Validate bet amount (minimum 1000 lamports = 0.000001 SOL)
     if bet_request.amount < 1000 {
+        tracing::debug!("Bet rejected: amount {} too small", bet_request.amount);
         return Err(StatusCode::BAD_REQUEST);
     }
 
     // Generate unique bet ID
     let bet_id = format!("bet_{}", Uuid::new_v4().simple());
 
-    // Get current sequencer nonce for VRF
-    let sequencer_nonce = state.settlement_stats.total_batches_processed.load(Ordering::Relaxed) as u64;
+    // Get unique nonce for VRF (atomic increment for thread safety)
+    let sequencer_nonce = state.bet_counter.fetch_add(1, Ordering::Relaxed);
 
     // Generate coin flip outcome using VRF or fallback to CSPRNG
     let coin_result = if let Some(vrf_keypair) = &state.vrf_keypair {
@@ -539,23 +544,46 @@ pub async fn bet_handler(
             .map_err(|_| StatusCode::BAD_REQUEST)?;
         let user_bytes = user_pubkey.to_bytes();
 
-        // Generate VRF proof
-        let vrf_proof = create_vrf_proof_from_string(
-            vrf_keypair,
-            &bet_id,
-            &user_bytes,
-            sequencer_nonce,
-        )
-        .map_err(|e| {
-            error!("VRF proof generation failed: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        // Clone necessary data for the blocking task
+        let vrf_keypair_clone = vrf_keypair.clone();
+        let bet_id_clone = bet_id.clone();
+        let player_address_clone = bet_request.player_address.clone();
+
+        tracing::debug!("Starting VRF proof generation for bet_id={}, nonce={}", bet_id, sequencer_nonce);
+
+        // Generate VRF proof in blocking task with timeout to avoid blocking async runtime
+        let vrf_proof_future = tokio::task::spawn_blocking(move || {
+            tracing::debug!("VRF blocking task started for bet_id={}, nonce={}", bet_id_clone, sequencer_nonce);
+            let result = create_vrf_proof_from_string(
+                &vrf_keypair_clone,
+                &bet_id_clone,
+                &user_bytes,
+                sequencer_nonce,
+            );
+            tracing::debug!("VRF blocking task completed for bet_id={}, result={:?}", bet_id_clone, result.is_ok());
+            result
+        });
+
+        let vrf_proof = tokio::time::timeout(std::time::Duration::from_secs(5), vrf_proof_future)
+            .await
+            .map_err(|_| {
+                error!("VRF task timed out after 5 seconds for bet_id={}, nonce={}", bet_id, sequencer_nonce);
+                StatusCode::REQUEST_TIMEOUT
+            })?
+            .map_err(|e| {
+                error!("VRF task spawn failed: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .map_err(|e| {
+                error!("VRF proof generation failed: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
         // Log VRF details for auditability
         info!(
             "VRF: bet_id={}, user={}, nonce={}, outcome={}, signature={}",
             bet_id,
-            bet_request.player_address,
+            player_address_clone,
             sequencer_nonce,
             vrf_proof.outcome_string(),
             hex::encode(&vrf_proof.signature[..8]) // First 8 bytes for brevity
@@ -1036,6 +1064,7 @@ async fn main() -> Result<()> {
         settlement_prover,
         settlement_persistence: settlement_persistence.clone(),
         vrf_keypair,
+        bet_counter: Arc::new(AtomicU64::new(0)),
     };
 
     // Settlement processor for ZK proof batching (VF Node background pattern)
@@ -1142,6 +1171,7 @@ mod tests {
             settlement_prover: None, // No ZK prover for tests
             settlement_persistence,
             vrf_keypair: None,       // No VRF keypair for tests
+            bet_counter: Arc::new(AtomicU64::new(0)),
         };
 
         let app = create_app(state.clone());

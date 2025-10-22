@@ -38,6 +38,17 @@ pub struct VRFKeypair {
     keypair: Keypair,
 }
 
+impl Clone for VRFKeypair {
+    fn clone(&self) -> Self {
+        // Reconstruct the keypair from its components
+        let secret_key = SecretKey::from_bytes(&self.keypair.secret.to_bytes()).unwrap();
+        let public_key = PublicKey::from_bytes(&self.keypair.public.to_bytes()).unwrap();
+        let keypair = Keypair { secret: secret_key, public: public_key };
+        
+        Self { keypair }
+    }
+}
+
 /// Serializable format for keypair storage
 #[derive(Serialize, Deserialize)]
 struct KeypairData {
