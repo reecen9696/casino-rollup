@@ -117,7 +117,7 @@ impl SettlementPersistence {
     }
 
     /// Save settlement batch for crash-safe processing (Phase 3e requirement)
-    pub async fn save_batch(&self, batch_id: &str, items: Vec<SettlementItem>) -> Result<()> {
+    pub async fn save_batch(&self, batch_id: &str, items: Vec<SettlementItem>) -> Result<u64> {
         // Extract numeric batch ID from string format "batch_N"
         let batch_id_num: u64 = batch_id
             .strip_prefix("batch_")
@@ -129,8 +129,8 @@ impl SettlementPersistence {
                 NEXT_ID.fetch_add(1, Ordering::Relaxed)
             });
 
-        self.create_batch(&items).await?;
-        Ok(())
+        // Create batch with the specified ID, not auto-generated
+        self.create_batch_with_id(batch_id_num, &items).await
     }
 
     /// Mark batch as completed (Phase 3e requirement)
@@ -156,6 +156,47 @@ impl SettlementPersistence {
         let mut data = self.data.write().await;
         let batch_id = data.last_batch_id + 1;
         data.last_batch_id = batch_id;
+
+        let batch = SettlementBatch {
+            batch_id,
+            status: SettlementBatchStatus::Pending,
+            created_at: now,
+            updated_at: now,
+            proof_data: None,
+            transaction_signature: None,
+            retry_count: 0,
+            error_message: None,
+            items: items.to_vec(),
+        };
+
+        // Add all bet IDs to processed set for deduplication
+        for item in items {
+            data.processed_bet_ids.insert(item.bet_id.clone());
+        }
+
+        data.batches.insert(batch_id, batch);
+        drop(data);
+
+        self.save_to_file().await?;
+
+        tracing::info!(
+            "Created settlement batch {} with {} items",
+            batch_id,
+            items.len()
+        );
+        Ok(batch_id)
+    }
+
+    /// Create a new settlement batch with a specific ID
+    pub async fn create_batch_with_id(&self, batch_id: u64, items: &[SettlementItem]) -> Result<u64> {
+        let now = Utc::now();
+
+        let mut data = self.data.write().await;
+        
+        // Update last_batch_id if this ID is higher
+        if batch_id > data.last_batch_id {
+            data.last_batch_id = batch_id;
+        }
 
         let batch = SettlementBatch {
             batch_id,

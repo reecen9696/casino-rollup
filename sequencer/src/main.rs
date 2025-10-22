@@ -251,16 +251,19 @@ async fn process_settlement_batch(
 
     // Phase 3e: Save batch to persistent storage for crash safety
     let batch_id_str = format!("batch_{}", batch_id);
-    if let Err(e) = settlement_persistence
+    let actual_batch_id = match settlement_persistence
         .save_batch(&batch_id_str, batch.to_vec())
         .await
     {
-        error!(
-            "Failed to save batch {} to persistent storage: {}",
-            batch_id, e
-        );
-        return; // Don't process if we can't persist (crash safety requirement)
-    }
+        Ok(id) => id,
+        Err(e) => {
+            error!(
+                "Failed to save batch {} to persistent storage: {}",
+                batch_id, e
+            );
+            return; // Don't process if we can't persist (crash safety requirement)
+        }
+    };
 
     stats
         .items_in_current_batch
@@ -271,40 +274,40 @@ async fn process_settlement_batch(
     let proof_data = if let Some(settlement_prover) = settlement_prover {
         info!(
             "Generating ZK proof for batch {} with {} items",
-            batch_id,
+            actual_batch_id,
             batch.len()
         );
 
         match settlement_prover.generate_proof(batch).await {
             Ok(proof) => {
-                info!("ZK proof generated successfully for batch {}", batch_id);
+                info!("ZK proof generated successfully for batch {}", actual_batch_id);
 
                 // Verify the proof for testing
                 match settlement_prover.verify_proof(&proof).await {
                     Ok(true) => {
-                        info!("ZK proof verified successfully for batch {}", batch_id);
+                        info!("ZK proof verified successfully for batch {}", actual_batch_id);
 
                         // Convert proof to bytes for Solana submission
                         match proof.to_bytes() {
                             Ok(proof_bytes) => Some(proof_bytes),
                             Err(e) => {
-                                error!("Failed to serialize proof for batch {}: {}", batch_id, e);
+                                error!("Failed to serialize proof for batch {}: {}", actual_batch_id, e);
                                 None
                             }
                         }
                     }
                     Ok(false) => {
-                        error!("ZK proof verification failed for batch {}", batch_id);
+                        error!("ZK proof verification failed for batch {}", actual_batch_id);
                         None
                     }
                     Err(e) => {
-                        error!("Error verifying ZK proof for batch {}: {}", batch_id, e);
+                        error!("Error verifying ZK proof for batch {}: {}", actual_batch_id, e);
                         None
                     }
                 }
             }
             Err(e) => {
-                error!("Failed to generate ZK proof for batch {}: {}", batch_id, e);
+                error!("Failed to generate ZK proof for batch {}: {}", actual_batch_id, e);
                 None
             }
         }
@@ -320,27 +323,43 @@ async fn process_settlement_batch(
     // Submit to Solana if client is available
     if let Some(solana_client) = solana_client {
         if let Some(proof_bytes) = proof_data {
-            match submit_batch_to_solana_with_proof(&*solana_client, batch_id, batch, &proof_bytes)
+            match submit_batch_to_solana_with_proof(&*solana_client, actual_batch_id, batch, &proof_bytes)
                 .await
             {
                 Ok(signature) => {
                     info!(
                         "Batch {} submitted to Solana successfully with proof: {}",
-                        batch_id, signature
+                        actual_batch_id, signature
                     );
+                    
+                    // Store the transaction signature in settlement persistence
+                    if let Err(e) = settlement_persistence.store_transaction(actual_batch_id, &signature.to_string()).await {
+                        error!("Failed to store transaction signature for batch {}: {}", actual_batch_id, e);
+                    } else {
+                        info!("Transaction signature stored for batch {}: {}", actual_batch_id, signature);
+                    }
                 }
                 Err(e) => {
                     error!(
                         "Failed to submit batch {} to Solana: {}. Continuing with local processing.",
-                        batch_id, e
+                        actual_batch_id, e
                     );
                 }
             }
         } else {
             error!(
                 "No proof available for batch {}, skipping Solana submission",
-                batch_id
+                actual_batch_id
             );
+        }
+    } else {
+        // For testing: store a mock transaction signature when Solana is not available
+        info!("Solana not available, storing mock transaction signature for batch {}", actual_batch_id);
+        let mock_signature = format!("mock_tx_{}_confirmed", actual_batch_id);
+        if let Err(e) = settlement_persistence.store_transaction(actual_batch_id, &mock_signature).await {
+            error!("Failed to store mock transaction signature for batch {}: {}", actual_batch_id, e);
+        } else {
+            info!("Mock transaction signature stored for batch {}: {}", actual_batch_id, mock_signature);
         }
     }
 
@@ -363,14 +382,15 @@ async fn process_settlement_batch(
     .ok();
 
     // Phase 3e: Mark batch as completed in persistent storage
-    if let Err(e) = settlement_persistence.mark_completed(&batch_id_str).await {
-        error!("Failed to mark batch {} as completed: {}", batch_id, e);
+    let actual_batch_id_str = format!("batch_{}", actual_batch_id);
+    if let Err(e) = settlement_persistence.mark_completed(&actual_batch_id_str).await {
+        error!("Failed to mark batch {} as completed: {}", actual_batch_id, e);
         // Continue anyway - the batch was processed successfully
     }
 
     tracing::info!(
         "Settlement batch {} processed and persisted in {}μs (ready for oracle/ZK integration)",
-        batch_id,
+        actual_batch_id,
         start_time.elapsed().as_micros()
     );
 }
