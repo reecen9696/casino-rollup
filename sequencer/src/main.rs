@@ -521,16 +521,65 @@ pub async fn bet_handler(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    // CPU-intensive random generation in background thread (VF Node pattern)
-    let coin_result = tokio::task::spawn_blocking(move || {
-        let mut rng = rand::thread_rng();
-        rng.gen::<bool>()
-    })
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     // Generate unique bet ID
     let bet_id = format!("bet_{}", Uuid::new_v4().simple());
+
+    // Get current sequencer nonce for VRF
+    let sequencer_nonce = state.settlement_stats.total_batches_processed.load(Ordering::Relaxed) as u64;
+
+    // Generate coin flip outcome using VRF or fallback to CSPRNG
+    let coin_result = if let Some(vrf_keypair) = &state.vrf_keypair {
+        // Use VRF for deterministic, verifiable randomness
+        use crate::vrf::create_vrf_proof_from_string;
+        use solana_sdk::pubkey::Pubkey;
+        use std::str::FromStr;
+
+        // Parse player address to public key bytes
+        let user_pubkey = Pubkey::from_str(&bet_request.player_address)
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+        let user_bytes = user_pubkey.to_bytes();
+
+        // Generate VRF proof
+        let vrf_proof = create_vrf_proof_from_string(
+            vrf_keypair,
+            &bet_id,
+            &user_bytes,
+            sequencer_nonce,
+        )
+        .map_err(|e| {
+            error!("VRF proof generation failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        // Log VRF details for auditability
+        info!(
+            "VRF: bet_id={}, user={}, nonce={}, outcome={}, signature={}",
+            bet_id,
+            bet_request.player_address,
+            sequencer_nonce,
+            vrf_proof.outcome_string(),
+            hex::encode(&vrf_proof.signature[..8]) // First 8 bytes for brevity
+        );
+
+        vrf_proof.outcome
+    } else {
+        // Fallback to CSPRNG when VRF is disabled
+        let coin_result = tokio::task::spawn_blocking(move || {
+            let mut rng = rand::thread_rng();
+            rng.gen::<bool>()
+        })
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        info!(
+            "CSPRNG: bet_id={}, user={}, outcome={}",
+            bet_id,
+            bet_request.player_address,
+            if coin_result { "heads" } else { "tails" }
+        );
+
+        coin_result
+    };
 
     // Determine if player won
     let won = bet_request.guess == coin_result;
