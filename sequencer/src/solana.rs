@@ -315,6 +315,97 @@ impl SolanaClient {
 
         Ok(logs)
     }
+
+    /// Reconcile off-chain database with on-chain ledger state (Phase 3e requirement)
+    /// This ensures our local database matches the actual on-chain state
+    pub async fn reconcile_with_onchain_state(
+        &self,
+        off_chain_batches: &[crate::settlement_persistence::SettlementBatch],
+    ) -> Result<ReconciliationReport> {
+        info!("Starting DB reconciliation with on-chain ledger");
+
+        let mut report = ReconciliationReport {
+            total_batches_checked: 0,
+            onchain_confirmed: 0,
+            offchain_pending: 0,
+            discrepancies: Vec::new(),
+        };
+
+        for batch in off_chain_batches {
+            report.total_batches_checked += 1;
+
+            // For now, we'll check transaction signatures if they exist
+            if let Some(tx_sig) = &batch.transaction_signature {
+                match self.verify_transaction_status(tx_sig).await {
+                    Ok(confirmed) => {
+                        if confirmed {
+                            report.onchain_confirmed += 1;
+                            info!("Batch {} confirmed on-chain: {}", batch.batch_id, tx_sig);
+                        } else {
+                            report.discrepancies.push(format!(
+                                "Batch {} transaction {} not confirmed on-chain",
+                                batch.batch_id, tx_sig
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        report.discrepancies.push(format!(
+                            "Failed to verify batch {} transaction {}: {}",
+                            batch.batch_id, tx_sig, e
+                        ));
+                    }
+                }
+            } else {
+                report.offchain_pending += 1;
+            }
+        }
+
+        info!(
+            "Reconciliation complete: {}/{} batches confirmed on-chain, {} pending, {} discrepancies",
+            report.onchain_confirmed, report.total_batches_checked, report.offchain_pending, report.discrepancies.len()
+        );
+
+        Ok(report)
+    }
+
+    /// Verify if a transaction signature exists and is confirmed on-chain
+    async fn verify_transaction_status(&self, signature: &str) -> Result<bool> {
+        let sig = Signature::from_str(signature)?;
+
+        tokio::task::spawn_blocking({
+            let rpc_url = self.config.rpc_url.clone();
+            let commitment = self.config.commitment;
+            move || {
+                let client = RpcClient::new_with_commitment(rpc_url, commitment);
+
+                // Try to get the transaction
+                match client
+                    .get_transaction(&sig, solana_transaction_status::UiTransactionEncoding::Json)
+                {
+                    Ok(transaction) => {
+                        // Check if transaction was successful
+                        Ok(transaction
+                            .transaction
+                            .meta
+                            .map(|meta| meta.err.is_none())
+                            .unwrap_or(false))
+                    }
+                    Err(_) => {
+                        // Transaction not found or other error - consider not confirmed
+                        Ok(false)
+                    }
+                }
+            }
+        })
+        .await?
+    }
+
+    /// Get current program account states for validation
+    pub async fn get_program_account_states(&self) -> Result<Vec<ProgramAccountState>> {
+        // This would query actual program accounts on-chain
+        // For now, return empty vector as placeholder
+        Ok(Vec::new())
+    }
 }
 
 /// Batch settlement data structure (matches verifier program)
@@ -343,6 +434,24 @@ pub struct SettlementResult {
     pub batch_id: u64,
     pub bets_count: usize,
     pub transaction_logs: Vec<String>,
+}
+
+/// DB reconciliation report for Phase 3e requirement
+#[derive(Debug, Clone)]
+pub struct ReconciliationReport {
+    pub total_batches_checked: u64,
+    pub onchain_confirmed: u64,
+    pub offchain_pending: u64,
+    pub discrepancies: Vec<String>,
+}
+
+/// Program account state for validation
+#[derive(Debug, Clone)]
+pub struct ProgramAccountState {
+    pub account_type: String,
+    pub address: Pubkey,
+    pub data_hash: Option<String>,
+    pub last_updated_slot: u64,
 }
 
 #[cfg(test)]

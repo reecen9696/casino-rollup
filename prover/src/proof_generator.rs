@@ -414,7 +414,7 @@ mod tests {
         // NOTE: Groth16 proofs include cryptographic randomness for security,
         // so proofs will NOT be byte-identical even with same seed.
         // "Deterministic" here means reproducibly verifiable, not identical output.
-        
+
         // Both proofs should verify correctly
         assert!(generator.verify_proof(&proof1).unwrap());
         assert!(generator.verify_proof(&proof2).unwrap());
