@@ -710,18 +710,187 @@
       "description": "Unbiased, auditable RNG (off-circuit for MVP)",
       "status": "not_started",
       "requirements_alignment": "🎯 Aligned with requirements.txt Phase 4",
+      "target_network": "Solana Testnet Ready",
+      "implementation_strategy": "Break into 5 smaller chunks, each with clear testing and validation",
+      "vrf_architecture_overview": {
+        "technology_choice": "ed25519-dalek for VRF implementation",
+        "message_format": "H(bet_id||user||nonce) for deterministic randomness",
+        "outcome_derivation": "LSB(VRF_sign(msg)) for coin flip result",
+        "storage_strategy": "Store (msg, sig, pubkey) with each bet for auditability",
+        "client_verification": "Expose VRF data in API/Explorer for independent verification",
+        "replay_protection": "User nonce prevents bet replay attacks"
+      },
+      "fairness_requirements": {
+        "distribution_target": "≈ 50/50 heads/tails over 1M+ simulations",
+        "auditability": "All VRF signatures verifiable by third parties",
+        "determinism": "Same inputs always produce same outcomes",
+        "unpredictability": "Outcomes not predictable before bet placement",
+        "transparency": "VRF data exposed in settlement batches and explorer"
+      },
       "tasks": {
-        "vrf_output_auditability": {
-          "description": "ed25519-dalek keypair; per-bet input = H(bet_id||user||nonce); outcome = LSB(VRF_sign(msg))",
+        "4a_vrf_keypair_setup": {
+          "description": "Generate ed25519-dalek keypair for VRF operations and establish key management",
           "status": "not_started",
-          "requirements_ref": "verifiable randomness (off-chain); client lib verifies sig"
+          "requirements_ref": "ed25519-dalek keypair; secure key storage",
+          "acceptance_criteria": [
+            "❌ Ed25519 keypair generation and storage",
+            "❌ Key rotation mechanism for operational security",
+            "❌ Environment variable configuration for key paths",
+            "❌ Keypair validation and error handling",
+            "❌ Integration with existing sequencer architecture",
+            "❌ Unit tests for key generation and validation"
+          ],
+          "estimated_time": "1 day",
+          "files_to_create": [
+            "sequencer/src/vrf/mod.rs",
+            "sequencer/src/vrf/keypair.rs",
+            "sequencer/tests/vrf_keypair_tests.rs"
+          ],
+          "dependencies": ["Phase 3 settlement foundation"]
+        },
+        "4b_vrf_message_generation": {
+          "description": "Implement deterministic message generation: H(bet_id||user||nonce)",
+          "status": "not_started",
+          "requirements_ref": "per-bet input = H(bet_id||user||nonce)",
+          "acceptance_criteria": [
+            "❌ SHA-256 hash function for message generation",
+            "❌ Deterministic message format: bet_id||user||nonce",
+            "❌ Input validation and sanitization",
+            "❌ Message uniqueness guarantees",
+            "❌ Integration with existing bet processing pipeline",
+            "❌ Comprehensive unit tests with test vectors",
+            "❌ Performance benchmarks (target: <1ms per message)"
+          ],
+          "estimated_time": "1 day",
+          "files_to_create": [
+            "sequencer/src/vrf/message.rs",
+            "sequencer/tests/vrf_message_tests.rs"
+          ],
+          "depends_on": ["4a_vrf_keypair_setup"]
+        },
+        "4c_vrf_signature_generation": {
+          "description": "Implement VRF signature generation and outcome derivation",
+          "status": "not_started",
+          "requirements_ref": "outcome = LSB(VRF_sign(msg)); store (msg, sig, pubkey)",
+          "acceptance_criteria": [
+            "❌ VRF signature generation using ed25519-dalek",
+            "❌ Outcome derivation from LSB(VRF_sign(msg))",
+            "❌ Signature verification functionality",
+            "❌ VRF data structure for storage (msg, sig, pubkey)",
+            "❌ Integration with bet outcome determination",
+            "❌ Error handling for signature failures",
+            "❌ Performance optimization (target: <5ms per signature)",
+            "❌ Comprehensive test suite with known test vectors"
+          ],
+          "estimated_time": "2 days",
+          "files_to_create": [
+            "sequencer/src/vrf/signature.rs",
+            "sequencer/src/vrf/outcome.rs",
+            "sequencer/tests/vrf_signature_tests.rs"
+          ],
+          "depends_on": ["4b_vrf_message_generation"]
+        },
+        "4d_sequencer_vrf_integration": {
+          "description": "Integrate VRF into sequencer bet processing pipeline",
+          "status": "not_started",
+          "requirements_ref": "replace CSPRNG with VRF in bet processing",
+          "acceptance_criteria": [
+            "❌ Replace existing random number generation with VRF",
+            "❌ Update bet processing to include VRF data",
+            "❌ Modify settlement persistence to store VRF signatures",
+            "❌ Update API responses to include VRF information",
+            "❌ Backward compatibility with existing bet format",
+            "❌ Performance maintains sub-second bet processing",
+            "❌ Integration tests with full bet→VRF→settlement pipeline",
+            "❌ Error handling and fallback mechanisms"
+          ],
+          "estimated_time": "2 days",
+          "files_to_modify": [
+            "sequencer/src/main.rs",
+            "sequencer/src/settlement_persistence.rs"
+          ],
+          "files_to_create": [
+            "tests/phase4/test-vrf-integration.sh",
+            "sequencer/tests/vrf_integration_tests.rs"
+          ],
+          "depends_on": ["4c_vrf_signature_generation"]
+        },
+        "4e_vrf_auditability_and_verification": {
+          "description": "Implement client verification library and API exposure",
+          "status": "not_started",
+          "requirements_ref": "client lib verifies sig; expose in API/Explorer",
+          "acceptance_criteria": [
+            "❌ Client library for VRF signature verification",
+            "❌ API endpoints to expose VRF data per bet",
+            "❌ Explorer integration to display VRF information",
+            "❌ JavaScript/TypeScript verification examples",
+            "❌ Documentation for third-party verification",
+            "❌ Batch verification for multiple bets",
+            "❌ Performance benchmarks for verification speed",
+            "❌ Integration with existing explorer dashboard"
+          ],
+          "estimated_time": "2 days",
+          "files_to_create": [
+            "client/vrf-verify/package.json",
+            "client/vrf-verify/src/verify.ts",
+            "explorer/src/components/VRFVerification.tsx",
+            "docs/vrf_verification_guide.md",
+            "tests/phase4/test-vrf-verification.sh"
+          ],
+          "depends_on": ["4d_sequencer_vrf_integration"]
+        },
+        "4f_fairness_testing_and_validation": {
+          "description": "Comprehensive fairness testing: 1M+ simulation, distribution analysis",
+          "status": "not_started",
+          "requirements_ref": "distribution ≈ fair over 1e6 sims; replay protection",
+          "acceptance_criteria": [
+            "❌ 1M+ bet simulation with VRF outcomes",
+            "❌ Statistical distribution analysis (target: 49.9-50.1%)",
+            "❌ Chi-square test for randomness validation",
+            "❌ Replay attack prevention testing",
+            "❌ Nonce uniqueness validation across sessions",
+            "❌ Performance testing under high load",
+            "❌ End-to-end system validation with VRF",
+            "❌ Audit report generation for fairness compliance"
+          ],
+          "estimated_time": "2 days",
+          "files_to_create": [
+            "tests/phase4/test-fairness-simulation.sh",
+            "tests/phase4/fairness_analyzer.py",
+            "tests/phase4/test-replay-protection.sh",
+            "docs/phase4_fairness_audit_report.md"
+          ],
+          "depends_on": ["4e_vrf_auditability_and_verification"]
         }
       },
       "exit_criteria": [
-        "❌ verifiable randomness with ed25519 VRF",
-        "❌ distribution ≈ fair over 1e6 sims",
-        "❌ replay protection via user nonce"
-      ]
+        "❌ ed25519-dalek VRF implementation operational",
+        "❌ deterministic message generation: H(bet_id||user||nonce)",
+        "❌ VRF signature generation and outcome derivation working",
+        "❌ sequencer integration maintains <1s bet processing",
+        "❌ client verification library functional",
+        "❌ API/Explorer exposes VRF data for auditability",
+        "❌ distribution ≈ fair over 1M+ simulations (49.9-50.1%)",
+        "❌ replay protection via user nonce validated",
+        "❌ comprehensive test suite covering all VRF functionality",
+        "❌ performance benchmarks meet targets (<5ms VRF generation)"
+      ],
+      "chunk_completion_order": [
+        "4a_vrf_keypair_setup",
+        "4b_vrf_message_generation",
+        "4c_vrf_signature_generation",
+        "4d_sequencer_vrf_integration",
+        "4e_vrf_auditability_and_verification",
+        "4f_fairness_testing_and_validation"
+      ],
+      "testing_strategy": {
+        "unit_tests": "Comprehensive unit tests for each VRF component",
+        "integration_tests": "Full pipeline testing with VRF-enabled bet processing",
+        "performance_tests": "VRF generation and verification speed benchmarks",
+        "fairness_tests": "Statistical analysis of 1M+ VRF outcomes",
+        "security_tests": "Replay attack prevention and nonce validation",
+        "client_tests": "Third-party verification library validation"
+      }
     },
     "5": {
       "name": "Real vaults (per-user PDA)",
