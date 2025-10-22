@@ -3,25 +3,25 @@
     "1": {
       "batch_id": 1,
       "status": "Confirmed",
-      "created_at": "2025-10-22T00:16:14.003574Z",
-      "updated_at": "2025-10-22T00:16:16.043081Z",
+      "created_at": "2025-10-22T02:16:36.923656Z",
+      "updated_at": "2025-10-22T02:16:36.936671Z",
       "proof_data": null,
-      "transaction_signature": null,
+      "transaction_signature": "mock_tx_1_confirmed",
       "retry_count": 0,
       "error_message": null,
       "items": [
         {
-          "bet_id": "bet_33f39825c2d744529ae620076082b14e",
+          "bet_id": "bet_cfb82b350eb64b7ab309b4d2beb5175c",
           "player_address": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
-          "amount": 5000,
-          "payout": 10000,
-          "timestamp": "2025-10-22T00:16:13.992241Z"
+          "amount": 1000,
+          "payout": 0,
+          "timestamp": "2025-10-22T02:16:36.851686Z"
         }
       ]
     }
   },
   "processed_bet_ids": [
-    "bet_33f39825c2d744529ae620076082b14e"
+    "bet_cfb82b350eb64b7ab309b4d2beb5175c"
   ],
   "last_batch_id": 1
 }
